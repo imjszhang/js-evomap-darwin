@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Darwin Evolution Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --border: #1e1e2e;
+    --text: #e0e0e0;
+    --dim: #666;
+    --accent: #00ff88;
+    --accent2: #ff6b35;
+    --accent3: #4ecdc4;
+    --danger: #ff3860;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .header h1 { font-size: 18px; font-weight: 600; letter-spacing: 1px; }
+  .header .tag {
+    background: var(--accent);
+    color: var(--bg);
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+  .header .status {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+  }
+  .dot.online { background: var(--accent); }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    min-height: calc(100vh - 61px);
+  }
+  .panel {
+    background: var(--surface);
+    padding: 16px 20px;
+  }
+  .panel h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--dim);
+    margin-bottom: 12px;
+  }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .stat-row:last-child { border-bottom: none; }
+  .stat-label { color: var(--dim); }
+  .stat-value { font-weight: 600; }
+  .stat-value.good { color: var(--accent); }
+  .stat-value.warn { color: var(--accent2); }
+  .gene-row {
+    display: flex;
+    gap: 12px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .gene-row .fitness {
+    min-width: 48px;
+    text-align: right;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .gene-row .id {
+    color: var(--dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 180px;
+  }
+  .gene-row .summary {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .event-log {
+    max-height: 300px;
+    overflow-y: auto;
+    font-size: 11px;
+  }
+  .event-log .entry {
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .event-log .time { color: var(--dim); margin-right: 8px; }
+  .event-log .type { color: var(--accent3); margin-right: 8px; }
+  canvas { max-height: 240px; }
+  .peer-node {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    margin: 3px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 11px;
+  }
+  .peer-node .trust {
+    color: var(--accent);
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>DARWIN</h1>
+    <span class="tag">EVOLUTION ENGINE</span>
+    <div class="status">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">Connecting...</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- Panel 1: Status -->
+    <div class="panel">
+      <h2>Node Status</h2>
+      <div id="statusPanel">
+        <div class="stat-row"><span class="stat-label">Node ID</span><span class="stat-value" id="nodeId">—</span></div>
+        <div class="stat-row"><span class="stat-label">Gene Pool</span><span class="stat-value" id="geneCount">0 / 200</span></div>
+        <div class="stat-row"><span class="stat-label">Tracked Capsules</span><span class="stat-value" id="trackedCount">0</span></div>
+        <div class="stat-row"><span class="stat-label">Total Records</span><span class="stat-value" id="totalRecords">0</span></div>
+        <div class="stat-row"><span class="stat-label">Avg Fitness</span><span class="stat-value good" id="avgFitness">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">Top Fitness</span><span class="stat-value good" id="topFitness">0.000</span></div>
+        <div class="stat-row"><span class="stat-label">Peers</span><span class="stat-value" id="peerCount">0</span></div>
+        <div class="stat-row"><span class="stat-label">Mutator</span><span class="stat-value" id="mutatorStatus">—</span></div>
+      </div>
+    </div>
+
+    <!-- Panel 2: Fitness Over Time -->
+    <div class="panel">
+      <h2>Fitness Over Time</h2>
+      <canvas id="fitnessChart"></canvas>
+    </div>
+
+    <!-- Panel 3: Gene Rankings -->
+    <div class="panel">
+      <h2>Top Genes</h2>
+      <div id="geneRankings"></div>
+    </div>
+
+    <!-- Panel 4: Network / Peers -->
+    <div class="panel">
+      <h2>Peer Network</h2>
+      <div id="peerNetwork"></div>
+    </div>
+
+    <!-- Panel 5: Token Comparison -->
+    <div class="panel">
+      <h2>Token Savings</h2>
+      <canvas id="tokenChart"></canvas>
+    </div>
+
+    <!-- Panel 6: Event Log -->
+    <div class="panel">
+      <h2>Evolution Log</h2>
+      <div class="event-log" id="eventLog"></div>
+    </div>
+  </div>
+
+<script>
+const WS_URL = `ws://${location.host}/ws`;
+
+// ── Charts ──────────────────────────────────────────────────────────────
+const fitnessCtx = document.getElementById('fitnessChart').getContext('2d');
+const fitnessChart = new Chart(fitnessCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      label: 'Avg Fitness',
+      data: [],
+      borderColor: '#00ff88',
+      backgroundColor: 'rgba(0,255,136,0.1)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 2,
+    }, {
+      label: 'Top Fitness',
+      data: [],
+      borderColor: '#4ecdc4',
+      backgroundColor: 'transparent',
+      borderDash: [4, 4],
+      tension: 0.3,
+      pointRadius: 0,
+    }]
+  },
+  options: {
+    responsive: true,
+    scales: {
+      x: { display: false },
+      y: { min: 0, max: 1, ticks: { color: '#666' }, grid: { color: '#1e1e2e' } }
+    },
+    plugins: { legend: { labels: { color: '#666', font: { size: 10 } } } }
+  }
+});
+
+const tokenCtx = document.getElementById('tokenChart').getContext('2d');
+const tokenChart = new Chart(tokenCtx, {
+  type: 'bar',
+  data: {
+    labels: ['Baseline', 'With Darwin'],
+    datasets: [{
+      data: [100, 100],
+      backgroundColor: ['#ff6b35', '#00ff88'],
+      borderRadius: 4,
+    }]
+  },
+  options: {
+    responsive: true,
+    indexAxis: 'y',
+    scales: {
+      x: { ticks: { color: '#666' }, grid: { color: '#1e1e2e' } },
+      y: { ticks: { color: '#e0e0e0' }, grid: { display: false } }
+    },
+    plugins: { legend: { display: false } }
+  }
+});
+
+// ── WebSocket ───────────────────────────────────────────────────────────
+let ws = null;
+let reconnectTimer = null;
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    document.getElementById('statusDot').classList.add('online');
+    document.getElementById('statusText').textContent = 'Connected';
+  };
+  ws.onclose = () => {
+    document.getElementById('statusDot').classList.remove('online');
+    document.getElementById('statusText').textContent = 'Reconnecting...';
+    reconnectTimer = setTimeout(connect, 3000);
+  };
+  ws.onmessage = (evt) => {
+    try { handleMessage(JSON.parse(evt.data)); } catch {}
+  };
+}
+
+function handleMessage(msg) {
+  if (msg.type === 'status') updateStatus(msg.data);
+  if (msg.type === 'event') addEvent(msg.data);
+  if (msg.type === 'genes') updateGenes(msg.data);
+  if (msg.type === 'peers') updatePeers(msg.data);
+}
+
+function updateStatus(s) {
+  document.getElementById('nodeId').textContent = s.nodeId ? s.nodeId.slice(0, 20) + '...' : '—';
+  document.getElementById('geneCount').textContent = `${s.geneStore?.size ?? 0} / ${s.geneStore?.capacity ?? 200}`;
+  document.getElementById('trackedCount').textContent = s.fitness?.trackedCapsules ?? 0;
+  document.getElementById('totalRecords').textContent = s.fitness?.totalRecords ?? 0;
+  document.getElementById('avgFitness').textContent = (s.fitness?.avgFitness ?? 0).toFixed(3);
+  document.getElementById('topFitness').textContent = (s.fitness?.topFitness ?? 0).toFixed(3);
+  document.getElementById('peerCount').textContent = s.peerCount ?? 0;
+  document.getElementById('mutatorStatus').textContent = s.hasMutator ? 'Active' : 'Inactive';
+
+  // Update fitness chart
+  const now = new Date().toISOString().slice(11, 19);
+  fitnessChart.data.labels.push(now);
+  fitnessChart.data.datasets[0].data.push(s.fitness?.avgFitness ?? 0);
+  fitnessChart.data.datasets[1].data.push(s.fitness?.topFitness ?? 0);
+  if (fitnessChart.data.labels.length > 60) {
+    fitnessChart.data.labels.shift();
+    fitnessChart.data.datasets[0].data.shift();
+    fitnessChart.data.datasets[1].data.shift();
+  }
+  fitnessChart.update('none');
+
+  // Update token chart
+  if (s.tokenBaseline && s.tokenDarwin) {
+    tokenChart.data.datasets[0].data = [s.tokenBaseline, s.tokenDarwin];
+    tokenChart.update('none');
+  }
+}
+
+function updateGenes(genes) {
+  const el = document.getElementById('geneRankings');
+  if (!genes || genes.length === 0) {
+    el.innerHTML = '<div style="color:var(--dim)">No genes yet</div>';
+    return;
+  }
+  el.innerHTML = genes.slice(0, 15).map(g => `
+    <div class="gene-row">
+      <span class="fitness">${(g.fitness ?? 0).toFixed(3)}</span>
+      <span class="id">${(g.assetId || '').slice(0, 16)}...</span>
+      <span class="summary">${g.capsule?.summary || '—'}</span>
+    </div>
+  `).join('');
+}
+
+function updatePeers(peers) {
+  const el = document.getElementById('peerNetwork');
+  if (!peers || peers.length === 0) {
+    el.innerHTML = '<div style="color:var(--dim)">No peers discovered</div>';
+    return;
+  }
+  el.innerHTML = peers.map(p => `
+    <div class="peer-node">
+      <span>${(p.nodeId || '').slice(0, 16)}...</span>
+      <span class="trust">${(p.trust ?? 0).toFixed(2)}</span>
+    </div>
+  `).join('');
+}
+
+function addEvent(evt) {
+  const el = document.getElementById('eventLog');
+  const time = new Date().toISOString().slice(11, 19);
+  const html = `<div class="entry"><span class="time">${time}</span><span class="type">${evt.type || 'event'}</span>${evt.message || JSON.stringify(evt)}</div>`;
+  el.insertAdjacentHTML('afterbegin', html);
+  while (el.children.length > 100) el.lastChild.remove();
+}
+
+// Start with demo data if no WS available
+setTimeout(() => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    document.getElementById('statusText').textContent = 'Demo Mode';
+    updateStatus({
+      nodeId: 'node_demo_00000000',
+      geneStore: { size: 0, capacity: 200 },
+      fitness: { totalRecords: 0, trackedCapsules: 0, scoredCapsules: 0, avgFitness: 0, topFitness: 0 },
+      hasMutator: false,
+      peerCount: 0,
+    });
+  }
+}, 2000);
+
+connect();
+</script>
+</body>
+</html>

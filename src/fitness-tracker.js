@@ -1,0 +1,204 @@
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
+
+const WINDOW_SIZE = 20;
+const MIN_SAMPLES = 3;
+const HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/**
+ * Tracks real-world effectiveness of Capsules via sliding-window fitness scoring.
+ * Each record captures success, token usage, and timing for one Capsule invocation.
+ */
+export class FitnessTracker {
+  #logPath;
+  #records; // capsuleId -> Record[]
+
+  constructor({ dataDir = "./data" } = {}) {
+    mkdirSync(dataDir, { recursive: true });
+    this.#logPath = join(dataDir, "fitness-log.jsonl");
+    this.#records = new Map();
+    this.#load();
+  }
+
+  /**
+   * Record a single Capsule usage outcome.
+   */
+  record(capsuleId, taskType, { success, tokensUsed, baselineTokens, durationMs } = {}) {
+    const entry = {
+      capsule_id: capsuleId,
+      task_type: taskType,
+      success: !!success,
+      tokens_used: tokensUsed ?? 0,
+      baseline_tokens: baselineTokens ?? 0,
+      duration_ms: durationMs ?? 0,
+      timestamp: new Date().toISOString(),
+    };
+
+    if (!this.#records.has(capsuleId)) {
+      this.#records.set(capsuleId, []);
+    }
+    const arr = this.#records.get(capsuleId);
+    arr.push(entry);
+
+    // Keep only the latest WINDOW_SIZE * 2 records in memory (prune old ones)
+    if (arr.length > WINDOW_SIZE * 3) {
+      arr.splice(0, arr.length - WINDOW_SIZE * 2);
+    }
+
+    this.#appendLog(entry);
+    return entry;
+  }
+
+  /**
+   * Compute the fitness score for a Capsule.
+   * Returns null if fewer than MIN_SAMPLES records exist.
+   *
+   * fitness = weighted_success_rate * (1 - weighted_avg_tokens / weighted_avg_baseline)
+   *
+   * Weights decay exponentially with a 7-day half-life.
+   */
+  getFitness(capsuleId) {
+    const arr = this.#records.get(capsuleId);
+    if (!arr || arr.length < MIN_SAMPLES) return null;
+
+    const now = Date.now();
+    const window = arr.slice(-WINDOW_SIZE);
+
+    let totalWeight = 0;
+    let successWeight = 0;
+    let tokensWeighted = 0;
+    let baselineWeighted = 0;
+
+    for (const r of window) {
+      const age = now - new Date(r.timestamp).getTime();
+      const weight = Math.pow(0.5, age / HALF_LIFE_MS);
+      totalWeight += weight;
+      if (r.success) successWeight += weight;
+      tokensWeighted += r.tokens_used * weight;
+      baselineWeighted += r.baseline_tokens * weight;
+    }
+
+    if (totalWeight === 0) return 0;
+
+    const successRate = successWeight / totalWeight;
+    const avgTokens = tokensWeighted / totalWeight;
+    const avgBaseline = baselineWeighted / totalWeight;
+
+    if (avgBaseline === 0) return successRate;
+
+    const tokenSavings = Math.max(0, 1 - avgTokens / avgBaseline);
+    return Math.round(successRate * tokenSavings * 1000) / 1000;
+  }
+
+  /**
+   * Rank all Capsules for a given task type by fitness (descending).
+   */
+  rank(taskType) {
+    const results = [];
+    for (const [capsuleId, records] of this.#records) {
+      const matching = records.filter(
+        (r) => r.task_type.toLowerCase() === taskType.toLowerCase(),
+      );
+      if (matching.length < MIN_SAMPLES) continue;
+
+      const fitness = this.getFitness(capsuleId);
+      if (fitness === null) continue;
+
+      results.push({
+        capsuleId,
+        fitness,
+        samples: matching.length,
+        successRate: matching.filter((r) => r.success).length / matching.length,
+      });
+    }
+    return results.sort((a, b) => b.fitness - a.fitness);
+  }
+
+  /**
+   * Rank all Capsules regardless of task type.
+   */
+  rankAll() {
+    const results = [];
+    for (const [capsuleId, records] of this.#records) {
+      if (records.length < MIN_SAMPLES) continue;
+      const fitness = this.getFitness(capsuleId);
+      if (fitness === null) continue;
+
+      const successCount = records.filter((r) => r.success).length;
+      results.push({
+        capsuleId,
+        fitness,
+        samples: records.length,
+        successRate: successCount / records.length,
+        taskTypes: [...new Set(records.map((r) => r.task_type))],
+      });
+    }
+    return results.sort((a, b) => b.fitness - a.fitness);
+  }
+
+  /**
+   * Get the number of recorded samples for a Capsule.
+   */
+  getSampleCount(capsuleId) {
+    const arr = this.#records.get(capsuleId);
+    return arr ? arr.length : 0;
+  }
+
+  /**
+   * Aggregate stats for the dashboard.
+   */
+  getStats() {
+    let totalRecords = 0;
+    let totalCapsules = 0;
+    const fitnessValues = [];
+
+    for (const [capsuleId, records] of this.#records) {
+      totalCapsules++;
+      totalRecords += records.length;
+      const f = this.getFitness(capsuleId);
+      if (f !== null) fitnessValues.push(f);
+    }
+
+    return {
+      totalRecords,
+      trackedCapsules: totalCapsules,
+      scoredCapsules: fitnessValues.length,
+      avgFitness: fitnessValues.length
+        ? Math.round((fitnessValues.reduce((a, b) => a + b, 0) / fitnessValues.length) * 1000) / 1000
+        : 0,
+      topFitness: fitnessValues.length ? Math.max(...fitnessValues) : 0,
+    };
+  }
+
+  /**
+   * Get all records for a specific Capsule (for debugging / dashboard).
+   */
+  getRecords(capsuleId) {
+    return this.#records.get(capsuleId) || [];
+  }
+
+  // ── Private ───────────────────────────────────────────────────────────
+
+  #appendLog(entry) {
+    appendFileSync(this.#logPath, JSON.stringify(entry) + "\n");
+  }
+
+  #load() {
+    if (!existsSync(this.#logPath)) return;
+    try {
+      const lines = readFileSync(this.#logPath, "utf-8").split("\n").filter(Boolean);
+      for (const line of lines) {
+        try {
+          const entry = JSON.parse(line);
+          const id = entry.capsule_id;
+          if (!this.#records.has(id)) this.#records.set(id, []);
+          this.#records.get(id).push(entry);
+        } catch {
+          // skip malformed line
+        }
+      }
+    } catch {
+      // file read error, start fresh
+    }
+  }
+}

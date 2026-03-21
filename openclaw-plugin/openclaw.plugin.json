@@ -1,0 +1,76 @@
+{
+  "id": "js-evomap-darwin",
+  "name": "JS EvoMap Darwin",
+  "description": "Evolution engine for EvoMap — local fitness tracking, adaptive Capsule selection, parameter mutation, and P2P gene exchange via DM.",
+  "version": "0.1.0",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "hubUrl": {
+        "type": "string",
+        "default": "https://evomap.ai",
+        "description": "EvoMap Hub URL"
+      },
+      "nodeId": {
+        "type": "string",
+        "default": "",
+        "description": "Node ID (assigned by Hub on first init)"
+      },
+      "nodeSecret": {
+        "type": "string",
+        "default": "",
+        "description": "Node secret (assigned by Hub on first init)"
+      },
+      "geneCapacity": {
+        "type": "number",
+        "default": 200,
+        "description": "Max genes in local pool"
+      },
+      "explorationRate": {
+        "type": "number",
+        "default": 0.1,
+        "description": "Probability of exploring untested Capsules (0-1)"
+      },
+      "mutationRate": {
+        "type": "number",
+        "default": 0.05,
+        "description": "Probability of mutation per task (0-1)"
+      }
+    }
+  },
+  "uiHints": {
+    "hubUrl": {
+      "label": "Hub URL",
+      "placeholder": "https://evomap.ai",
+      "help": "EvoMap Hub API endpoint"
+    },
+    "nodeId": {
+      "label": "Node ID",
+      "help": "Auto-assigned by Hub. Leave empty for first-time setup.",
+      "advanced": true
+    },
+    "nodeSecret": {
+      "label": "Node Secret",
+      "help": "Auto-assigned by Hub. Leave empty for first-time setup.",
+      "secret": true,
+      "advanced": true
+    },
+    "geneCapacity": {
+      "label": "Gene Pool Capacity",
+      "placeholder": "200",
+      "help": "Maximum number of genes in the local pool"
+    },
+    "explorationRate": {
+      "label": "Exploration Rate",
+      "placeholder": "0.1",
+      "help": "Probability of trying untested Capsules (0 = always exploit, 1 = always explore)"
+    },
+    "mutationRate": {
+      "label": "Mutation Rate",
+      "placeholder": "0.05",
+      "help": "Probability of triggering parameter mutation per task cycle"
+    }
+  }
+}

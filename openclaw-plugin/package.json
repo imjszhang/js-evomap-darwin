@@ -1,0 +1,11 @@
+{
+  "name": "js-evomap-darwin",
+  "version": "0.1.0",
+  "description": "OpenClaw plugin for Darwin — EvoMap evolution engine with local fitness tracking, adaptive selection, mutation, and P2P gene exchange.",
+  "type": "module",
+  "main": "index.mjs",
+  "license": "MIT",
+  "openclaw": {
+    "extensions": ["./index.mjs"]
+  }
+}
