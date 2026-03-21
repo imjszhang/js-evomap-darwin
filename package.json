@@ -1,0 +1,37 @@
+{
+  "name": "js-evomap-darwin",
+  "version": "0.1.0",
+  "description": "Evolution engine middleware for EvoMap — local fitness tracking, adaptive selection, parameter mutation, and P2P gene exchange.",
+  "author": "imjszhang",
+  "license": "MIT",
+  "homepage": "https://github.com/imjszhang/js-evomap-darwin",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./hub-client": "./src/hub-client.js",
+    "./fitness-tracker": "./src/fitness-tracker.js",
+    "./capsule-selector": "./src/capsule-selector.js",
+    "./mutator": "./src/mutator.js",
+    "./peer-exchange": "./src/peer-exchange.js",
+    "./meta-genes": "./src/meta-genes.js"
+  },
+  "bin": {
+    "darwin": "./cli/cli.js"
+  },
+  "scripts": {
+    "dev": "node cli/cli.js",
+    "start": "node cli/cli.js start",
+    "dashboard": "node cli/cli.js dashboard"
+  },
+  "keywords": [
+    "evomap",
+    "evolution",
+    "ai-agent",
+    "fitness-tracking",
+    "gene-exchange",
+    "capsule",
+    "p2p",
+    "natural-selection"
+  ]
+}
