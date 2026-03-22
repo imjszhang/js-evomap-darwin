@@ -1,14 +1,19 @@
 import { Darwin } from "../../src/index.js";
+import { Mutator } from "../../src/mutator.js";
+import { PeerExchange } from "../../src/peer-exchange.js";
 
 const DATA_DIR = process.env.DARWIN_DATA_DIR || "./data";
 
 function createDarwin() {
-  return new Darwin({
+  const darwin = new Darwin({
     hubUrl: process.env.HUB_URL,
     dataDir: DATA_DIR,
     nodeId: process.env.NODE_ID,
     nodeSecret: process.env.NODE_SECRET,
   });
+  darwin.use(new Mutator());
+  darwin.use(new PeerExchange({ hub: darwin.hub, dataDir: DATA_DIR }));
+  return darwin;
 }
 
 function parseFlags(args) {
@@ -63,6 +68,8 @@ async function cmdStatus() {
   console.log(`  Running:         ${s.running}`);
   console.log(`  Mutator:         ${s.hasMutator ? "attached" : "not attached"}`);
   console.log(`  Peer Exchange:   ${s.hasPeerExchange ? "attached" : "not attached"}`);
+  console.log(`  Peers:           ${s.peerCount}`);
+  console.log(`  Sponsor:         ${s.hasSponsor ? `${s.sponsor?.totalGrants ?? 0} grants` : "not attached"}`);
   console.log("");
   console.log("  ── Gene Store ──");
   console.log(`  Genes:           ${s.geneStore.size} / ${s.geneStore.capacity}`);
@@ -167,10 +174,8 @@ async function cmdGenes(args) {
 }
 
 async function cmdPeers() {
-  const { PeerExchange } = await import("../../src/peer-exchange.js");
   const darwin = createDarwin();
-  const pe = new PeerExchange({ hub: darwin.hub, dataDir: DATA_DIR });
-  const peers = pe.getPeers();
+  const peers = darwin.peers?.getPeers() ?? [];
 
   console.log(`\n  ── Peers (${peers.length}) ──\n`);
   if (peers.length === 0) {
@@ -262,6 +267,78 @@ async function cmdDashboard(args) {
   await new Promise(() => {});
 }
 
+async function cmdLeaderboard(args) {
+  const flags = parseFlags(args);
+  const darwin = createDarwin();
+  const taskType = flags["task-type"];
+  const ranked = darwin.tracker.rankByModel(taskType);
+
+  const title = taskType ? `Model Leaderboard: ${taskType}` : "Model Leaderboard (all tasks)";
+  console.log(`\n  ── ${title} ──\n`);
+
+  if (ranked.length === 0) {
+    console.log("  No model performance data yet. Record usage with model field to populate.\n");
+    return;
+  }
+
+  console.log("  Rank  Model            Fitness  Success  Avg Tokens  Samples");
+  console.log("  ────  ───────────────  ───────  ───────  ──────────  ───────");
+  for (let i = 0; i < ranked.length; i++) {
+    const r = ranked[i];
+    const model = (r.model || "unknown").padEnd(15);
+    console.log(`  #${String(i + 1).padEnd(3)}  ${model}  ${r.avgFitness.toFixed(3).padStart(7)}  ${(r.successRate * 100).toFixed(0).padStart(5)}%  ${String(r.avgTokens).padStart(10)}  ${String(r.samples).padStart(7)}`);
+  }
+  console.log("");
+}
+
+async function cmdSponsor(args) {
+  const flags = parseFlags(args);
+  const darwin = createDarwin();
+
+  if (flags.add) {
+    const { Sponsor } = await import("../../src/sponsor.js");
+    const sponsor = darwin.sponsor || new Sponsor({ dataDir: DATA_DIR });
+    const grant = sponsor.addGrant({
+      sponsorId: flags.sponsor || "demo-sponsor",
+      model: flags.model || "demo-model",
+      grantType: flags.type || "mutation",
+      tokenBudget: parseInt(flags.budget || "100000", 10),
+      rewardThreshold: parseFloat(flags.threshold || "0.8"),
+      rewardTokens: parseInt(flags.reward || "50000", 10),
+    });
+    console.log(`\n  Grant created: ${grant.grantId}`);
+    console.log(`  Sponsor: ${grant.sponsorId} / ${grant.model}`);
+    console.log(`  Budget:  ${grant.tokenBudget.toLocaleString()} tokens\n`);
+    return;
+  }
+
+  const { Sponsor } = await import("../../src/sponsor.js");
+  const sponsor = darwin.sponsor || new Sponsor({ dataDir: DATA_DIR });
+  const stats = sponsor.getStats();
+
+  console.log("\n  ── Sponsor Grants ──\n");
+  if (stats.totalGrants === 0) {
+    console.log("  No sponsor grants. Use 'darwin sponsor --add --sponsor <name> --model <model> --budget <n>' to add one.\n");
+    return;
+  }
+
+  console.log(`  Total Grants:     ${stats.totalGrants}`);
+  console.log(`  Total Budget:     ${stats.totalBudget.toLocaleString()} tokens`);
+  console.log(`  Total Used:       ${stats.totalUsed.toLocaleString()} tokens`);
+  console.log(`  Remaining:        ${stats.totalRemaining.toLocaleString()} tokens`);
+  console.log(`  Utilization:      ${(stats.utilizationRate * 100).toFixed(1)}%`);
+  console.log(`  Rewards:          ${stats.rewardsTriggered} (${stats.rewardTokensAwarded.toLocaleString()} tokens awarded)`);
+  console.log("");
+
+  if (Object.keys(stats.bySponsor).length > 0) {
+    console.log("  ── By Sponsor ──");
+    for (const [name, s] of Object.entries(stats.bySponsor)) {
+      console.log(`  ${name} (${s.model || "multi"}): ${s.used.toLocaleString()} / ${s.budget.toLocaleString()} tokens [${s.grants} grant(s)]`);
+    }
+    console.log("");
+  }
+}
+
 function cmdHelp() {
   console.log(`
   js-evomap-darwin — Evolution engine for EvoMap
@@ -275,6 +352,8 @@ function cmdHelp() {
     fitness [--task-type X] View fitness rankings
     genes [--top N]         View local gene pool
     peers                   View neighbor list
+    leaderboard [--task-type X]  View model performance rankings
+    sponsor [--add ...]     View or add sponsor grants
     publish-meta            Publish meta-genes to Hub
     dashboard               Launch real-time visualization
     help                    Show this help
@@ -296,6 +375,8 @@ const COMMANDS = {
   fitness: cmdFitness,
   genes: cmdGenes,
   peers: cmdPeers,
+  leaderboard: cmdLeaderboard,
+  sponsor: cmdSponsor,
   "publish-meta": cmdPublishMeta,
   dashboard: cmdDashboard,
   help: cmdHelp,

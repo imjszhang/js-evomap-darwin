@@ -123,10 +123,9 @@ export default function register(api) {
     parameters: { type: "object", properties: {} },
     async execute() {
       try {
-        const { PeerExchange } = await import(nodePath.join(PROJECT_ROOT, "src", "peer-exchange.js"));
         const darwin = await getDarwin(pluginCfg);
-        const pe = new PeerExchange({ hub: darwin.hub, dataDir: nodePath.join(PROJECT_ROOT, "data") });
-        return jsonResult(pe.getPeers());
+        const peers = darwin.peers?.getPeers() ?? [];
+        return jsonResult(peers);
       } catch (err) {
         return textResult(`Peer query failed: ${err.message}`);
       }
@@ -215,6 +214,69 @@ export default function register(api) {
     },
   });
 
+  api.registerTool({
+    name: "darwin_leaderboard",
+    label: "Darwin: Model Leaderboard",
+    description:
+      "View model performance rankings — shows how different AI models perform " +
+      "across task types, ranked by real fitness data from local A/B tests.",
+    parameters: {
+      type: "object",
+      properties: {
+        taskType: { type: "string", description: "Filter by task type (optional)" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const ranked = darwin.tracker.rankByModel(params.taskType);
+        if (ranked.length === 0) {
+          return textResult("No model data yet. Record usage with model field to populate.");
+        }
+        return jsonResult(ranked);
+      } catch (err) {
+        return textResult(`Leaderboard query failed: ${err.message}`);
+      }
+    },
+  });
+
+  api.registerTool({
+    name: "darwin_sponsor",
+    label: "Darwin: Sponsor Grants",
+    description:
+      "View sponsor grant status — token budgets from AI model providers " +
+      "that subsidize evolution experiments (mutation, A/B testing).",
+    parameters: {
+      type: "object",
+      properties: {
+        addGrant: { type: "boolean", description: "If true, add a new grant instead of viewing" },
+        sponsorId: { type: "string", description: "Sponsor name (for adding)" },
+        model: { type: "string", description: "Model name (for adding)" },
+        tokenBudget: { type: "number", description: "Token budget (for adding)" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const { Sponsor } = await import(nodePath.join(PROJECT_ROOT, "src", "sponsor.js"));
+        const sponsor = darwin.sponsor || new Sponsor({ dataDir: nodePath.join(PROJECT_ROOT, "data") });
+
+        if (params.addGrant && params.sponsorId) {
+          const grant = sponsor.addGrant({
+            sponsorId: params.sponsorId,
+            model: params.model || "unknown",
+            tokenBudget: params.tokenBudget || 100000,
+          });
+          return jsonResult({ created: true, grant });
+        }
+
+        return jsonResult(sponsor.getStats());
+      } catch (err) {
+        return textResult(`Sponsor query failed: ${err.message}`);
+      }
+    },
+  });
+
   // ── CLI ───────────────────────────────────────────────────────────────
 
   api.registerCli(
@@ -275,6 +337,34 @@ export default function register(api) {
         .action(async () => {
           const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
           await run("peers", []);
+        });
+
+      darwin
+        .command("leaderboard")
+        .description("View model performance rankings")
+        .option("--task-type <type>", "Filter by task type")
+        .action(async (opts) => {
+          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const args = [];
+          if (opts.taskType) args.push("--task-type", opts.taskType);
+          await run("leaderboard", args);
+        });
+
+      darwin
+        .command("sponsor")
+        .description("View or add sponsor grants")
+        .option("--add", "Add a new grant")
+        .option("--sponsor <name>", "Sponsor name")
+        .option("--model <model>", "Model name")
+        .option("--budget <n>", "Token budget")
+        .action(async (opts) => {
+          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const args = [];
+          if (opts.add) args.push("--add");
+          if (opts.sponsor) args.push("--sponsor", opts.sponsor);
+          if (opts.model) args.push("--model", opts.model);
+          if (opts.budget) args.push("--budget", opts.budget);
+          await run("sponsor", args);
         });
 
       darwin

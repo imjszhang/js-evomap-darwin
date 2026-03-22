@@ -9,6 +9,8 @@ export { HubClient } from "./hub-client.js";
 export { GeneStore } from "./gene-store.js";
 export { FitnessTracker } from "./fitness-tracker.js";
 export { CapsuleSelector } from "./capsule-selector.js";
+export { Sponsor } from "./sponsor.js";
+export { Leaderboard } from "./leaderboard.js";
 
 const DEFAULT_HEARTBEAT_MS = 900_000; // 15 min
 const DEFAULT_EVOLVE_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -25,6 +27,7 @@ export class Darwin {
   #selector;
   #mutator;
   #peerExchange;
+  #sponsor;
   #dataDir;
   #credentialsPath;
 
@@ -62,6 +65,7 @@ export class Darwin {
 
     this.#mutator = null;
     this.#peerExchange = null;
+    this.#sponsor = null;
   }
 
   get hub() { return this.#hub; }
@@ -69,15 +73,20 @@ export class Darwin {
   get tracker() { return this.#tracker; }
   get selector() { return this.#selector; }
   get running() { return this.#running; }
+  get peers() { return this.#peerExchange; }
+  get sponsor() { return this.#sponsor; }
 
   /**
-   * Attach optional modules (mutator, peer-exchange) after construction.
+   * Attach optional modules (mutator, peer-exchange, sponsor) after construction.
    */
   use(module) {
-    if (module.constructor?.name === "Mutator") {
+    const name = module.constructor?.name;
+    if (name === "Mutator") {
       this.#mutator = module;
-    } else if (module.constructor?.name === "PeerExchange") {
+    } else if (name === "PeerExchange") {
       this.#peerExchange = module;
+    } else if (name === "Sponsor") {
+      this.#sponsor = module;
     }
     return this;
   }
@@ -144,22 +153,37 @@ export class Darwin {
 
   /**
    * Fetch capsules from Hub and ingest into local gene store.
+   * Uses a two-phase strategy: search_only first (free), then targeted fetch.
    */
   async fetchAndIngest(signals) {
-    const res = await this.#hub.fetch({ signals });
-    const assets = res?.payload?.assets || res?.assets || [];
+    // Phase 1: free metadata scan
+    const preview = await this.#hub.fetch({ signals, searchOnly: true });
+    const candidates = preview?.payload?.assets || preview?.assets || [];
 
-    let ingested = 0;
-    for (const asset of assets) {
-      if (asset.type === "Capsule" && asset.asset_id) {
-        const existingFitness = this.#tracker.getFitness(asset.asset_id);
-        this.#store.add(asset, existingFitness ?? 0);
-        ingested++;
+    // Phase 2: filter to Capsules we don't already have
+    const needed = [];
+    for (const asset of candidates) {
+      if (asset.type === "Capsule" && asset.asset_id && !this.#store.has(asset.asset_id)) {
+        needed.push(asset.asset_id);
       }
     }
 
-    this.#emit("fetch", { total: assets.length, ingested });
-    return { total: assets.length, ingested };
+    let ingested = 0;
+    if (needed.length > 0) {
+      const full = await this.#hub.fetch({ assetIds: needed });
+      const assets = full?.payload?.assets || full?.assets || [];
+
+      for (const asset of assets) {
+        if (asset.type === "Capsule" && asset.asset_id) {
+          const existingFitness = this.#tracker.getFitness(asset.asset_id);
+          this.#store.add(asset, existingFitness ?? 0);
+          ingested++;
+        }
+      }
+    }
+
+    this.#emit("fetch", { total: candidates.length, ingested, skipped: candidates.length - needed.length });
+    return { total: candidates.length, ingested, skipped: candidates.length - needed.length };
   }
 
   /**
@@ -196,6 +220,10 @@ export class Darwin {
       fitness: this.#tracker.getStats(),
       hasMutator: !!this.#mutator,
       hasPeerExchange: !!this.#peerExchange,
+      peerCount: this.#peerExchange?.peerCount ?? 0,
+      hasSponsor: !!this.#sponsor,
+      sponsor: this.#sponsor?.getStats() ?? null,
+      leaderboard: this.#tracker.rankByModel?.() ?? [],
     };
   }
 
@@ -216,9 +244,21 @@ export class Darwin {
       // 1. Fetch new capsules
       await this.fetchAndIngest();
 
-      // 2. Mutator cycle (if attached)
+      // 2. Mutator cycle (if attached) — use sponsor grant when available
       if (this.#mutator && typeof this.#mutator.cycle === "function") {
+        let grant = null;
+        if (this.#sponsor) {
+          grant = this.#sponsor.getAvailableGrant("mutation");
+        }
         await this.#mutator.cycle(this);
+        if (grant) {
+          const estimatedTokens = 500;
+          this.#sponsor.consumeTokens(grant.grantId, estimatedTokens, {
+            phase: "mutation",
+            cycleTimestamp: new Date().toISOString(),
+          });
+          this.#emit("grant-consumed", { grantId: grant.grantId, amount: estimatedTokens, phase: "mutation" });
+        }
       }
 
       // 3. Peer exchange (if attached)

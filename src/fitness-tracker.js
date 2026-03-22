@@ -23,7 +23,7 @@ export class FitnessTracker {
   /**
    * Record a single Capsule usage outcome.
    */
-  record(capsuleId, taskType, { success, tokensUsed, baselineTokens, durationMs } = {}) {
+  record(capsuleId, taskType, { success, tokensUsed, baselineTokens, durationMs, model, sponsorId } = {}) {
     const entry = {
       capsule_id: capsuleId,
       task_type: taskType,
@@ -31,6 +31,8 @@ export class FitnessTracker {
       tokens_used: tokensUsed ?? 0,
       baseline_tokens: baselineTokens ?? 0,
       duration_ms: durationMs ?? 0,
+      model: model ?? null,
+      sponsor_id: sponsorId ?? null,
       timestamp: new Date().toISOString(),
     };
 
@@ -134,6 +136,51 @@ export class FitnessTracker {
       });
     }
     return results.sort((a, b) => b.fitness - a.fitness);
+  }
+
+  /**
+   * Rank models by aggregated fitness across all records.
+   * Groups by model field and computes avg fitness, avg tokens, sample count.
+   * Optionally filter by taskType.
+   */
+  rankByModel(taskType) {
+    const byModel = new Map();
+
+    for (const [, records] of this.#records) {
+      for (const r of records) {
+        if (!r.model) continue;
+        if (taskType && r.task_type.toLowerCase() !== taskType.toLowerCase()) continue;
+
+        if (!byModel.has(r.model)) {
+          byModel.set(r.model, { successes: 0, total: 0, tokens: 0, baseline: 0 });
+        }
+        const m = byModel.get(r.model);
+        m.total++;
+        if (r.success) m.successes++;
+        m.tokens += r.tokens_used;
+        m.baseline += r.baseline_tokens;
+      }
+    }
+
+    const results = [];
+    for (const [model, m] of byModel) {
+      if (m.total < MIN_SAMPLES) continue;
+      const successRate = m.successes / m.total;
+      const avgTokens = Math.round(m.tokens / m.total);
+      const avgBaseline = m.baseline / m.total;
+      const tokenSavings = avgBaseline > 0 ? Math.max(0, 1 - m.tokens / m.total / avgBaseline) : 0;
+      const avgFitness = Math.round(successRate * tokenSavings * 1000) / 1000;
+
+      results.push({
+        model,
+        avgFitness,
+        successRate: Math.round(successRate * 1000) / 1000,
+        avgTokens,
+        samples: m.total,
+      });
+    }
+
+    return results.sort((a, b) => b.avgFitness - a.avgFitness);
   }
 
   /**

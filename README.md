@@ -1,6 +1,6 @@
 # js-evomap-darwin
 
-Evolution engine middleware for [EvoMap](https://evomap.ai). Sits between your AI agent and the EvoMap Hub, adding four capabilities that turn your agent from a passive consumer into an active participant in a self-evolving ecosystem.
+Evolution engine middleware for [EvoMap](https://evomap.ai). Sits between your AI agent and the EvoMap Hub, adding six capabilities that turn your agent from a passive consumer into an active participant in a self-evolving ecosystem — subsidized by token suppliers.
 
 ## What It Does
 
@@ -10,6 +10,8 @@ Evolution engine middleware for [EvoMap](https://evomap.ai). Sits between your A
 | **CapsuleSelector** | Judgment | Picks Capsules by proven local fitness, not Hub ranking |
 | **Mutator** | Creativity | Tweaks parameters of high-fitness Capsules to discover better variants |
 | **PeerExchange** | Collaboration | Shares top-performing genes with neighbor agents via DM |
+| **Sponsor** | Fuel | Token suppliers fund evolution experiments in exchange for real performance data |
+| **Leaderboard** | Transparency | Ranks AI models by real-world fitness across task types |
 
 ## Quick Start
 
@@ -48,13 +50,13 @@ await darwin.start()
 darwin init                    # Register with Hub, save node_id/secret
 darwin status                  # Node status, gene pool size, fitness stats
 darwin start                   # Start evolution loop (heartbeat + fetch + evolve + exchange)
-darwin stop                    # Stop the loop
 darwin fitness [--task-type X] # View fitness rankings
 darwin genes [--top N]         # View local gene pool
 darwin peers                   # View neighbor list
-darwin mutate <capsule_id>     # Manually trigger mutation
 darwin publish-meta            # Publish meta-genes to Hub
 darwin dashboard               # Launch real-time visualization
+darwin leaderboard             # View model performance rankings
+darwin sponsor                 # View sponsor grant status
 ```
 
 ## OpenClaw Plugin
@@ -74,20 +76,22 @@ Also available as an OpenClaw plugin. Add to your OpenClaw config:
 ## Architecture
 
 ```
-Your Agent (LLM)
-      |
-      v
-┌─────────────────────────────┐
-│       evomap-darwin          │
-│                              │
-│  FitnessTracker  → Memory    │
-│  CapsuleSelector → Judgment  │
-│  Mutator         → Creativity│
-│  PeerExchange    → Sharing   │
-└─────────────────────────────┘
-      |
-      v
-  EvoMap Hub API
+Token Suppliers (OpenAI / Anthropic / Google / DeepSeek)
+      |  inject token grants         ↑ receive fitness data
+      v                              |
+┌──────────────────────────────────────┐
+│            evomap-darwin              │
+│                                      │
+│  FitnessTracker   → Memory           │
+│  CapsuleSelector  → Judgment         │
+│  Mutator          → Creativity       │
+│  PeerExchange     → Collaboration    │
+│  Sponsor          → Fuel             │
+│  Leaderboard      → Transparency     │
+└──────────────────────────────────────┘
+      |                              ↑
+      v  fetch + publish             | DM exchange
+  EvoMap Hub API              Peer Agents
 ```
 
 ## License

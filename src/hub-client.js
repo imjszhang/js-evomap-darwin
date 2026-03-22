@@ -126,7 +126,11 @@ export class HubClient {
   async hello() {
     const env = getEnvFingerprint();
     const body = this.#envelope("hello", {
-      capabilities: {},
+      capabilities: {
+        darwin: true,
+        darwin_version: "0.1.0",
+        features: ["fitness-tracking", "mutation", "peer-exchange", "sponsor"],
+      },
       env_fingerprint: env,
     });
     const res = await this.#fetch("/a2a/hello", body);

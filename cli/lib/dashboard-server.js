@@ -48,6 +48,9 @@ export function startDashboardServer(darwin, { port = 3777 } = {}) {
     // Send initial status
     send(socket, { type: "status", data: darwin.getStatus() });
     send(socket, { type: "genes", data: darwin.store.ranked(15) });
+    if (darwin.peers) {
+      send(socket, { type: "peers", data: darwin.peers.getPeers() });
+    }
   });
 
   function send(socket, data) {
@@ -95,9 +98,25 @@ export function startDashboardServer(darwin, { port = 3777 } = {}) {
     broadcast({ type: "status", data: darwin.getStatus() });
   });
   darwin.on("evolve", () => {
-    broadcast({ type: "status", data: darwin.getStatus() });
+    const status = darwin.getStatus();
+    broadcast({ type: "status", data: status });
     broadcast({ type: "genes", data: darwin.store.ranked(15) });
+    if (darwin.peers) {
+      broadcast({ type: "peers", data: darwin.peers.getPeers() });
+    }
+    if (status.leaderboard && status.leaderboard.length > 0) {
+      broadcast({ type: "leaderboard", data: status.leaderboard });
+    }
+    if (status.sponsor) {
+      broadcast({ type: "sponsor", data: status.sponsor });
+    }
     broadcast({ type: "event", data: { type: "evolve", message: "Evolution cycle completed" } });
+  });
+  darwin.on("grant-consumed", (data) => {
+    broadcast({ type: "event", data: { type: "sponsor", message: `Grant ${data.grantId.slice(0, 16)}... consumed ${data.amount} tokens (${data.phase})` } });
+    if (darwin.sponsor) {
+      broadcast({ type: "sponsor", data: darwin.sponsor.getStats() });
+    }
   });
   darwin.on("error", (e) => {
     broadcast({ type: "event", data: { type: "error", message: `${e.phase}: ${e.error}` } });

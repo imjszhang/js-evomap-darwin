@@ -8,12 +8,17 @@ import { getEnvFingerprint } from "./utils/env-fingerprint.js";
  * installing the darwin library.
  */
 
+const DARWIN_CHAIN_ID = "darwin-evolution-strategies-v1";
+
 function bundle(gene, capsule, event) {
+  gene.chain_id = DARWIN_CHAIN_ID;
   gene.asset_id = computeAssetId(gene);
   capsule.gene = gene.asset_id;
+  capsule.chain_id = DARWIN_CHAIN_ID;
   capsule.asset_id = computeAssetId(capsule);
   event.capsule_id = capsule.asset_id;
   event.genes_used = [gene.asset_id];
+  event.chain_id = DARWIN_CHAIN_ID;
   event.asset_id = computeAssetId(event);
   return [gene, capsule, event];
 }
