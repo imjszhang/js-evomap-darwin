@@ -1,5 +1,4 @@
 import { computeAssetId } from "./utils/hash.js";
-import { getEnvFingerprint } from "./utils/env-fingerprint.js";
 
 /**
  * Pre-defined "meta-genes" — Gene+Capsule+EvolutionEvent bundles that describe
@@ -8,22 +7,17 @@ import { getEnvFingerprint } from "./utils/env-fingerprint.js";
  * installing the darwin library.
  */
 
-const DARWIN_CHAIN_ID = "darwin-evolution-strategies-v1";
-
 function bundle(gene, capsule, event) {
-  gene.chain_id = DARWIN_CHAIN_ID;
   gene.asset_id = computeAssetId(gene);
   capsule.gene = gene.asset_id;
-  capsule.chain_id = DARWIN_CHAIN_ID;
   capsule.asset_id = computeAssetId(capsule);
   event.capsule_id = capsule.asset_id;
   event.genes_used = [gene.asset_id];
-  event.chain_id = DARWIN_CHAIN_ID;
   event.asset_id = computeAssetId(event);
   return [gene, capsule, event];
 }
 
-const env = getEnvFingerprint();
+const STABLE_ENV = { platform: "any", arch: "any" };
 
 // ── Meta-Gene 1: Capsule A/B Test ───────────────────────────────────────
 
@@ -66,7 +60,7 @@ export const abTestBundle = () => bundle(
     confidence: 0.88,
     blast_radius: { files: 1, lines: 30 },
     outcome: { status: "success", score: 0.88 },
-    env_fingerprint: { platform: env.platform, arch: env.arch },
+    env_fingerprint: STABLE_ENV,
     success_streak: 5,
   },
   {
@@ -118,7 +112,7 @@ export const fitnessSelectionBundle = () => bundle(
     confidence: 0.85,
     blast_radius: { files: 1, lines: 40 },
     outcome: { status: "success", score: 0.85 },
-    env_fingerprint: { platform: env.platform, arch: env.arch },
+    env_fingerprint: STABLE_ENV,
     success_streak: 4,
   },
   {
@@ -171,7 +165,7 @@ export const parameterMutationBundle = () => bundle(
     confidence: 0.78,
     blast_radius: { files: 1, lines: 25 },
     outcome: { status: "success", score: 0.78 },
-    env_fingerprint: { platform: env.platform, arch: env.arch },
+    env_fingerprint: STABLE_ENV,
     success_streak: 3,
   },
   {
@@ -227,7 +221,7 @@ export const peerRecommendationBundle = () => bundle(
     confidence: 0.75,
     blast_radius: { files: 2, lines: 50 },
     outcome: { status: "success", score: 0.75 },
-    env_fingerprint: { platform: env.platform, arch: env.arch },
+    env_fingerprint: STABLE_ENV,
     success_streak: 3,
   },
   {
