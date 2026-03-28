@@ -16,6 +16,7 @@ const STALE_SUBSCRIPTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_TOP_GENES = 10;
 const DELIVER_DELAY_MID_MS = 60_000;   // 1 min
 const DELIVER_DELAY_LOW_MS = 300_000;  // 5 min
+const MAX_GENES_PER_DELIVERY = 20;
 
 /**
  * Decentralized subscription engine for Darwin.
@@ -552,9 +553,10 @@ export class Subscription {
       this.#peerGraph.addFromHints(payload.peer_hints, fromId);
     }
 
-    // Process full gene delivery
+    // Process full gene delivery (capped, fitness zeroed — local tracker judges)
     if (payload.genes && Array.isArray(payload.genes)) {
-      for (const gene of payload.genes) {
+      const genes = payload.genes.slice(0, MAX_GENES_PER_DELIVERY);
+      for (const gene of genes) {
         if (gene.capsule && gene.asset_id && !darwin.store.has(gene.asset_id)) {
           darwin.store.add(gene.capsule, 0);
         }

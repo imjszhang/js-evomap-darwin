@@ -18,6 +18,8 @@ export { PeerGraph } from "./peer-graph.js";
 
 const DEFAULT_HEARTBEAT_MS = 900_000; // 15 min
 const DEFAULT_EVOLVE_MS = 4 * 60 * 60 * 1000; // 4 hours
+const MAX_INGEST_PER_CYCLE = 10;
+const CAPACITY_CAUTIOUS_RATIO = 0.9;
 
 /**
  * Darwin — the evolution engine.
@@ -183,19 +185,31 @@ export class Darwin {
    * Uses a two-phase strategy: search_only first (free), then targeted fetch.
    */
   async fetchAndIngest(signals) {
+    const cautious = this.#store.size >= this.#store.capacity * CAPACITY_CAUTIOUS_RATIO;
+
     // Phase 1: free metadata scan
     const preview = await this.#hub.fetch({ signals, searchOnly: true });
     const candidates = preview?.payload?.assets || preview?.assets || [];
 
-    // Phase 2: filter to Capsules we don't already have
+    // Phase 2: filter to Capsules we don't already have, capped per cycle
     const needed = [];
     for (const asset of candidates) {
+      if (needed.length >= MAX_INGEST_PER_CYCLE) break;
       if (asset.type === "Capsule" && asset.asset_id && !this.#store.has(asset.asset_id)) {
         needed.push(asset.asset_id);
       }
     }
 
+    // In cautious mode (>= 90% full), skip the costly fetch entirely
+    // — GeneStore.add() would reject most fitness=0 entries anyway.
+    if (cautious && needed.length > 0 && this.#store.lowestFitness > 0) {
+      const skipped = candidates.length - needed.length;
+      this.#emit("fetch", { total: candidates.length, ingested: 0, skipped, rejected: needed.length });
+      return { total: candidates.length, ingested: 0, skipped, rejected: needed.length };
+    }
+
     let ingested = 0;
+    let rejected = 0;
     if (needed.length > 0) {
       const full = await this.#hub.fetch({ assetIds: needed });
       const assets = full?.payload?.assets || full?.assets || [];
@@ -203,14 +217,16 @@ export class Darwin {
       for (const asset of assets) {
         if (asset.type === "Capsule" && asset.asset_id) {
           const existingFitness = this.#tracker.getFitness(asset.asset_id);
-          this.#store.add(asset, existingFitness ?? 0);
-          ingested++;
+          const added = this.#store.add(asset, existingFitness ?? 0);
+          if (added) ingested++;
+          else rejected++;
         }
       }
     }
 
-    this.#emit("fetch", { total: candidates.length, ingested, skipped: candidates.length - needed.length });
-    return { total: candidates.length, ingested, skipped: candidates.length - needed.length };
+    const skipped = candidates.length - needed.length;
+    this.#emit("fetch", { total: candidates.length, ingested, skipped, rejected });
+    return { total: candidates.length, ingested, skipped, rejected };
   }
 
   /**
@@ -284,10 +300,23 @@ export class Darwin {
     }
   }
 
+  #getActiveSignals() {
+    const signals = new Set();
+    for (const r of this.#tracker.rankAll()) {
+      if (r.taskTypes) r.taskTypes.forEach((t) => signals.add(t));
+    }
+    for (const entry of this.#store.ranked(50)) {
+      const triggers = entry.capsule?.trigger || entry.capsule?.signals_match || [];
+      for (const t of triggers) signals.add(t);
+    }
+    return [...signals];
+  }
+
   async #doEvolveCycle() {
     try {
-      // 1. Fetch new capsules
-      await this.fetchAndIngest();
+      // 1. Fetch new capsules (signal-directed when possible)
+      const signals = this.#getActiveSignals();
+      await this.fetchAndIngest(signals.length > 0 ? signals : undefined);
 
       // 2. Mutator cycle (if attached) — use sponsor grant when available
       if (this.#mutator && typeof this.#mutator.cycle === "function") {

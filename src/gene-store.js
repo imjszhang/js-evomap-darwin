@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 const DEFAULT_CAPACITY = 200;
+const MAX_CAPSULE_SIZE = 50_000;
 
 /**
  * Local gene pool with fixed capacity and fitness-based eviction.
@@ -22,24 +23,35 @@ export class GeneStore {
 
   get size() { return this.#genes.size; }
   get capacity() { return this.#capacity; }
+  get isFull() { return this.#genes.size >= this.#capacity; }
+
+  get lowestFitness() {
+    return this.#genes.size > 0 ? this.#getLowestFitness() : 0;
+  }
 
   /**
    * Add or update a capsule in the local gene pool.
-   * If at capacity, evicts the lowest-fitness gene.
+   * Returns true if the capsule was actually added/updated, false if rejected.
+   *
+   * Rejection reasons:
+   * - Fails structural validation (#isValidCapsule)
+   * - Pool is full and the new fitness does not exceed the current lowest
    */
   add(capsule, fitness = null) {
+    if (!this.#isValidCapsule(capsule)) return false;
     const id = capsule.asset_id;
-    if (!id) return;
 
     if (this.#genes.has(id)) {
       const entry = this.#genes.get(id);
       entry.capsule = capsule;
       if (fitness !== null) entry.fitness = fitness;
       this.#save();
-      return;
+      return true;
     }
 
     if (this.#genes.size >= this.#capacity) {
+      const lowest = this.#getLowestFitness();
+      if ((fitness ?? 0) <= lowest) return false;
       this.#evictLowest();
     }
 
@@ -49,6 +61,7 @@ export class GeneStore {
       fitness: fitness ?? 0,
     });
     this.#save();
+    return true;
   }
 
   get(assetId) {
@@ -125,6 +138,30 @@ export class GeneStore {
   }
 
   // ── Private ───────────────────────────────────────────────────────────
+
+  #isValidCapsule(capsule) {
+    if (!capsule || typeof capsule !== "object") return false;
+    if (!capsule.asset_id) return false;
+    if (capsule.type !== "Capsule") return false;
+    const hasContent = typeof capsule.content === "string" && capsule.content.length > 0;
+    const hasStrategy = Array.isArray(capsule.strategy) && capsule.strategy.length > 0;
+    if (!hasContent && !hasStrategy) return false;
+    const triggers = capsule.trigger || capsule.signals_match;
+    if (!Array.isArray(triggers) || triggers.length === 0) return false;
+    try {
+      if (JSON.stringify(capsule).length > MAX_CAPSULE_SIZE) return false;
+    } catch { return false; }
+    return true;
+  }
+
+  #getLowestFitness() {
+    let lowest = Infinity;
+    for (const [, entry] of this.#genes) {
+      const f = entry.fitness ?? 0;
+      if (f < lowest) lowest = f;
+    }
+    return lowest === Infinity ? 0 : lowest;
+  }
 
   #evictLowest() {
     let lowestId = null;
