@@ -286,7 +286,10 @@
   </div>
 
 <script>
-const WS_URL = `ws://${location.host}/ws`;
+const IS_PLUGIN_MODE = location.pathname.startsWith('/plugins/');
+const API_BASE = IS_PLUGIN_MODE ? `${location.origin}/plugins/js-evomap-darwin/api` : null;
+const WS_URL = IS_PLUGIN_MODE ? null : `ws://${location.host}/ws`;
+const POLL_INTERVAL_MS = 5000;
 const MODEL_COLORS = ['#00ff88', '#ff6b35', '#4ecdc4', '#a78bfa', '#f472b6', '#fbbf24', '#34d399', '#60a5fa'];
 
 // ── Charts ──────────────────────────────────────────────────────────────
@@ -345,11 +348,20 @@ const tokenChart = new Chart(tokenCtx, {
   }
 });
 
-// ── WebSocket ───────────────────────────────────────────────────────────
+// ── Connection: WebSocket (standalone) or REST polling (plugin) ─────────
 let ws = null;
 let reconnectTimer = null;
+let pollTimer = null;
 
 function connect() {
+  if (IS_PLUGIN_MODE) {
+    connectREST();
+  } else {
+    connectWS();
+  }
+}
+
+function connectWS() {
   ws = new WebSocket(WS_URL);
   ws.onopen = () => {
     document.getElementById('statusDot').classList.add('online');
@@ -358,11 +370,36 @@ function connect() {
   ws.onclose = () => {
     document.getElementById('statusDot').classList.remove('online');
     document.getElementById('statusText').textContent = 'Reconnecting...';
-    reconnectTimer = setTimeout(connect, 3000);
+    reconnectTimer = setTimeout(connectWS, 3000);
   };
   ws.onmessage = (evt) => {
     try { handleMessage(JSON.parse(evt.data)); } catch {}
   };
+}
+
+async function pollAPI() {
+  try {
+    const [status, genes, peers, leaderboard] = await Promise.all([
+      fetch(`${API_BASE}/status`).then(r => r.json()),
+      fetch(`${API_BASE}/genes`).then(r => r.json()),
+      fetch(`${API_BASE}/peers`).then(r => r.json()),
+      fetch(`${API_BASE}/leaderboard`).then(r => r.json()),
+    ]);
+    document.getElementById('statusDot').classList.add('online');
+    document.getElementById('statusText').textContent = 'Connected (REST)';
+    updateStatus(status);
+    updateGenes(genes);
+    updatePeers(peers);
+    updateLeaderboard(leaderboard);
+  } catch {
+    document.getElementById('statusDot').classList.remove('online');
+    document.getElementById('statusText').textContent = 'Polling failed';
+  }
+}
+
+function connectREST() {
+  pollAPI();
+  pollTimer = setInterval(pollAPI, POLL_INTERVAL_MS);
 }
 
 function handleMessage(msg) {
@@ -518,22 +555,23 @@ function addEvent(evt) {
   while (el.children.length > 100) el.lastChild.remove();
 }
 
-// Start with demo data if no WS available
-setTimeout(() => {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    document.getElementById('statusText').textContent = 'Demo Mode';
-    updateStatus({
-      nodeId: 'node_demo_00000000',
-      geneStore: { size: 0, capacity: 200 },
-      fitness: { totalRecords: 0, trackedCapsules: 0, scoredCapsules: 0, avgFitness: 0, topFitness: 0 },
-      hasMutator: false,
-      hasSponsor: false,
-      peerCount: 0,
-      leaderboard: [],
-      sponsor: null,
-    });
-  }
-}, 2000);
+if (!IS_PLUGIN_MODE) {
+  setTimeout(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      document.getElementById('statusText').textContent = 'Demo Mode';
+      updateStatus({
+        nodeId: 'node_demo_00000000',
+        geneStore: { size: 0, capacity: 200 },
+        fitness: { totalRecords: 0, trackedCapsules: 0, scoredCapsules: 0, avgFitness: 0, topFitness: 0 },
+        hasMutator: false,
+        hasSponsor: false,
+        peerCount: 0,
+        leaderboard: [],
+        sponsor: null,
+      });
+    }
+  }, 2000);
+}
 
 connect();
 </script>

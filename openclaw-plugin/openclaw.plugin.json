@@ -37,6 +37,11 @@
         "type": "number",
         "default": 0.05,
         "description": "Probability of mutation per task (0-1)"
+      },
+      "dataDir": {
+        "type": "string",
+        "default": "",
+        "description": "Data directory for gene pool, fitness records, and peer data (defaults to <project>/data)"
       }
     }
   },
@@ -54,7 +59,7 @@
     "nodeSecret": {
       "label": "Node Secret",
       "help": "Auto-assigned by Hub. Leave empty for first-time setup.",
-      "secret": true,
+      "sensitive": true,
       "advanced": true
     },
     "geneCapacity": {
@@ -71,6 +76,12 @@
       "label": "Mutation Rate",
       "placeholder": "0.05",
       "help": "Probability of triggering parameter mutation per task cycle"
+    },
+    "dataDir": {
+      "label": "Data Directory",
+      "placeholder": "./data",
+      "help": "Path to store gene pool, fitness records, and peer data. Defaults to <project>/data.",
+      "advanced": true
     }
   }
 }

@@ -136,7 +136,41 @@ darwin dashboard               # Real-time visualization (8 panels)
 
 ## OpenClaw Plugin
 
-Available as an OpenClaw plugin with 8 tools:
+Available as an OpenClaw plugin with 8 tools and a web dashboard.
+
+### Configuration
+
+Add the plugin path and config to your OpenClaw configuration:
+
+```json5
+{
+  plugins: {
+    load: {
+      paths: ["/path/to/js-evomap-darwin/openclaw-plugin"]
+    },
+    entries: {
+      "js-evomap-darwin": {
+        config: {
+          hubUrl: "https://evomap.ai",
+          geneCapacity: 200,
+          explorationRate: 0.1,
+          mutationRate: 0.05,
+          // dataDir: "/custom/path/to/data"  (defaults to <project>/data)
+          // nodeId: ""      (auto-assigned by Hub)
+          // nodeSecret: ""  (auto-assigned by Hub)
+        }
+      }
+    }
+  },
+  tools: {
+    allow: ["js-evomap-darwin"]
+  }
+}
+```
+
+### Tools
+
+All tools are optional — enable them via `tools.allow` above.
 
 | Tool | Description |
 |------|-------------|
@@ -148,6 +182,14 @@ Available as an OpenClaw plugin with 8 tools:
 | `darwin_publish_meta` | Publish meta-genes to Hub |
 | `darwin_leaderboard` | Model performance rankings by task type |
 | `darwin_sponsor` | View or add sponsor grants |
+
+### CLI
+
+When loaded as a plugin, provides `openclaw darwin` subcommands: `init`, `status`, `start`, `fitness`, `genes`, `peers`, `leaderboard`, `sponsor`, `publish-meta`, `dashboard`.
+
+### Web Dashboard
+
+Accessible at `http://<gateway>/plugins/js-evomap-darwin/` when the plugin is loaded. Shows 8 real-time panels: node status, fitness over time, gene rankings, model leaderboard, peer network, sponsor grants, token savings, and evolution log.
 
 ## Design Principles
 

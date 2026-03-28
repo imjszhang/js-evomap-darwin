@@ -1,8 +1,44 @@
 import nodePath from "node:path";
+import nodeFs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = nodePath.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = nodePath.resolve(__dirname, "..");
+const DASHBOARD_DIR = nodePath.join(PROJECT_ROOT, "dashboard");
+const ROUTE_PREFIX = "/plugins/js-evomap-darwin";
+
+const MIME_TYPES = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+};
+
+function sendJson(res, statusCode, body) {
+  const payload = JSON.stringify(body);
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  });
+  res.end(payload);
+}
+
+function serveStaticFile(res, filePath) {
+  const ext = nodePath.extname(filePath).toLowerCase();
+  const mime = MIME_TYPES[ext] || "application/octet-stream";
+  const stream = nodeFs.createReadStream(filePath);
+  stream.on("error", () => {
+    res.writeHead(404, { "Content-Type": "text/plain" });
+    res.end("Not Found");
+  });
+  res.writeHead(200, { "Content-Type": mime });
+  stream.pipe(res);
+}
 
 function textResult(text) {
   return { content: [{ type: "text", text }] };
@@ -21,7 +57,7 @@ async function getDarwin(pluginCfg) {
   const { Mutator } = await import(nodePath.join(PROJECT_ROOT, "src", "mutator.js"));
   const { PeerExchange } = await import(nodePath.join(PROJECT_ROOT, "src", "peer-exchange.js"));
 
-  const dataDir = nodePath.join(PROJECT_ROOT, "data");
+  const dataDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
 
   darwinInstance = new Darwin({
     hubUrl: pluginCfg.hubUrl || "https://evomap.ai",
@@ -56,7 +92,7 @@ export default function register(api) {
         return textResult(`Status failed: ${err.message}`);
       }
     },
-  });
+  }, { optional: true });
 
   api.registerTool({
     name: "darwin_fitness",
@@ -85,7 +121,7 @@ export default function register(api) {
         return textResult(`Fitness query failed: ${err.message}`);
       }
     },
-  });
+  }, { optional: true });
 
   api.registerTool({
     name: "darwin_genes",
@@ -114,7 +150,7 @@ export default function register(api) {
         return textResult(`Gene query failed: ${err.message}`);
       }
     },
-  });
+  }, { optional: true });
 
   api.registerTool({
     name: "darwin_peers",
@@ -130,7 +166,7 @@ export default function register(api) {
         return textResult(`Peer query failed: ${err.message}`);
       }
     },
-  });
+  }, { optional: true });
 
   api.registerTool({
     name: "darwin_evolve",
@@ -169,7 +205,7 @@ export default function register(api) {
         return textResult(`Evolution cycle failed: ${err.message}`);
       }
     },
-  });
+  }, { optional: true });
 
   api.registerTool({
     name: "darwin_publish_meta",
@@ -212,7 +248,7 @@ export default function register(api) {
         return textResult(`Meta-gene publish failed: ${err.message}`);
       }
     },
-  });
+  }, { optional: true });
 
   api.registerTool({
     name: "darwin_leaderboard",
@@ -238,7 +274,7 @@ export default function register(api) {
         return textResult(`Leaderboard query failed: ${err.message}`);
       }
     },
-  });
+  }, { optional: true });
 
   api.registerTool({
     name: "darwin_sponsor",
@@ -259,7 +295,7 @@ export default function register(api) {
       try {
         const darwin = await getDarwin(pluginCfg);
         const { Sponsor } = await import(nodePath.join(PROJECT_ROOT, "src", "sponsor.js"));
-        const sponsor = darwin.sponsor || new Sponsor({ dataDir: nodePath.join(PROJECT_ROOT, "data") });
+        const sponsor = darwin.sponsor || new Sponsor({ dataDir: pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data") });
 
         if (params.addGrant && params.sponsorId) {
           const grant = sponsor.addGrant({
@@ -274,6 +310,134 @@ export default function register(api) {
       } catch (err) {
         return textResult(`Sponsor query failed: ${err.message}`);
       }
+    },
+  }, { optional: true });
+
+  // ── Gateway HTTP Routes: Dashboard + REST API ───────────────────────
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}`,
+    auth: "plugin",
+    async handler(_req, res) {
+      res.writeHead(301, { Location: `${ROUTE_PREFIX}/` });
+      res.end();
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/`,
+    auth: "plugin",
+    async handler(_req, res) {
+      serveStaticFile(res, nodePath.join(DASHBOARD_DIR, "index.html"));
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/status`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        sendJson(res, 200, darwin.getStatus());
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/fitness`,
+    auth: "plugin",
+    async handler(req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        const taskType = parsed.searchParams.get("taskType") || "";
+        const limit = parseInt(parsed.searchParams.get("limit") || "20", 10);
+        const ranked = taskType
+          ? darwin.tracker.rank(taskType).slice(0, limit)
+          : darwin.tracker.rankAll().slice(0, limit);
+        sendJson(res, 200, ranked);
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/genes`,
+    auth: "plugin",
+    async handler(req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        const top = parseInt(parsed.searchParams.get("top") || "20", 10);
+        const ranked = darwin.store.ranked(top);
+        sendJson(res, 200, ranked.map((g) => ({
+          assetId: g.assetId,
+          fitness: g.fitness,
+          summary: g.capsule?.summary,
+          triggers: g.capsule?.trigger,
+        })));
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/peers`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const peers = darwin.peers?.getPeers() ?? [];
+        sendJson(res, 200, peers);
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/leaderboard`,
+    auth: "plugin",
+    async handler(req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        const taskType = parsed.searchParams.get("taskType") || undefined;
+        const ranked = darwin.tracker.rankByModel(taskType);
+        sendJson(res, 200, ranked);
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/{filePath}`,
+    auth: "plugin",
+    async handler(req, res) {
+      const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+      const subPath = decodeURIComponent(parsed.pathname.slice(ROUTE_PREFIX.length + 1));
+      if (subPath.startsWith("api/")) {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not Found");
+        return;
+      }
+      const filePath = nodePath.normalize(nodePath.join(DASHBOARD_DIR, subPath));
+      if (!filePath.startsWith(DASHBOARD_DIR)) {
+        res.writeHead(403, { "Content-Type": "text/plain" });
+        res.end("Forbidden");
+        return;
+      }
+      if (!nodeFs.existsSync(filePath)) {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("Not Found");
+        return;
+      }
+      serveStaticFile(res, filePath);
     },
   });
 
