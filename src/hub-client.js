@@ -314,6 +314,46 @@ export class HubClient {
     return this.#get(`/a2a/service/search${q}`);
   }
 
+  // ── Optional Accelerators: Session & Service Marketplace ─────────────
+  // Level 3 Hub dependency — used by Subscription module when available,
+  // silently falls back to DM-only path on failure.
+
+  async publishService(serviceDescriptor) {
+    return this.#fetch("/a2a/service/publish", {
+      sender_id: this.#nodeId,
+      ...serviceDescriptor,
+    });
+  }
+
+  async createSession(sessionConfig) {
+    return this.#fetch("/a2a/session/create", {
+      sender_id: this.#nodeId,
+      ...sessionConfig,
+    });
+  }
+
+  async joinSession(sessionId) {
+    return this.#fetch("/a2a/session/join", {
+      sender_id: this.#nodeId,
+      session_id: sessionId,
+    });
+  }
+
+  async sendSessionMessage(sessionId, message) {
+    return this.#fetch("/a2a/session/message", {
+      sender_id: this.#nodeId,
+      session_id: sessionId,
+      message,
+    });
+  }
+
+  async leaveSession(sessionId) {
+    return this.#fetch("/a2a/session/leave", {
+      sender_id: this.#nodeId,
+      session_id: sessionId,
+    });
+  }
+
   // ── Governance ───────────────────────────────────────────────────────
 
   async getProjectList() {

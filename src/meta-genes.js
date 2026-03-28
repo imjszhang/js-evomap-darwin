@@ -177,59 +177,64 @@ export const parameterMutationBundle = () => bundle(
   },
 );
 
-// ── Meta-Gene 4: Peer Recommendation ────────────────────────────────────
+// ── Meta-Gene 4: Decentralized Gene Subscription ────────────────────────
 
 export const peerRecommendationBundle = () => bundle(
   {
     type: "Gene",
     schema_version: "1.5.0",
     category: "innovate",
-    signals_match: ["peer-exchange", "agent-collaboration", "gene-sharing", "collective-intelligence"],
-    summary: "Exchange top-performing Capsule recommendations with neighbor agents via DM. Build a trust network based on recommendation quality.",
+    signals_match: ["subscription", "gossip-discovery", "peer-exchange", "agent-collaboration", "gene-sharing", "collective-intelligence"],
+    summary: "Subscribe to high-fitness gene channels from peer agents. Deliver verified genes to your subscribers. Grow the network via gossip peer_hints, reducing Hub dependency over time.",
   },
   {
     type: "Capsule",
     schema_version: "1.5.0",
-    trigger: ["peer-exchange", "agent-collaboration", "gene-sharing", "collective-intelligence"],
-    summary: "Peer recommendation protocol — exchange high-fitness gene rankings with neighbor agents via EvoMap DM",
+    trigger: ["subscription", "gossip-discovery", "peer-exchange", "agent-collaboration", "gene-sharing", "collective-intelligence"],
+    summary: "Decentralized gene subscription — topic-based, trust-driven P2P gene distribution over EvoMap DM",
     content:
-      "Intent: Accelerate evolution by sharing fitness intelligence with other agents.\n\n" +
+      "Intent: Build a decentralized gene distribution network where agents subscribe to topic channels " +
+      "from peer publishers, receive verified genes, and grow the network organically via gossip.\n\n" +
       "Protocol:\n" +
-      "1. Discover other agents via Hub directory (GET /a2a/directory).\n" +
-      "2. Send a darwin:hello DM to each. Those who respond with darwin:hello-ack are peers.\n" +
-      "3. Periodically broadcast your top-10 fitness rankings to peers:\n" +
-      "   { type: 'darwin:fitness-report', top: [{ asset_id, fitness, samples, task_types }] }\n" +
-      "4. When you receive a peer's report:\n" +
-      "   a. Check if you have each recommended gene locally.\n" +
-      "   b. If not, and peer reports fitness > 0.5 with 5+ samples, fetch it from Hub.\n" +
-      "   c. Test it locally. Do NOT trust peer's fitness — verify with your own data.\n" +
-      "5. Track per-peer trust: if their recommendations test well locally, increase trust.\n" +
-      "   If their recommendations are duds, decrease trust.\n" +
-      "6. Prioritize recommendations from high-trust peers.\n\n" +
-      "Why this works:\n" +
-      "Each agent explores a different slice of the Capsule space. By sharing what works, " +
-      "the collective finds good solutions faster than any individual agent could alone. " +
-      "The trust mechanism prevents spam and low-quality recommendations from spreading.",
+      "1. Discover nodes via Hub directory (cold start only). Send darwin:hello DM; those who reply " +
+      "with darwin:hello-ack and a catalog of their channels are potential publishers.\n" +
+      "2. Evaluate each publisher's catalog: { channels: [{ topic, genes, avgFitness, samples }] }. " +
+      "Subscribe only to publishers whose fitness on your active topics exceeds your local best.\n" +
+      "3. Send darwin:subscribe with your chosen topics. The publisher adds you to their subscriber list.\n" +
+      "4. Receive periodic darwin:deliver messages containing gene digests (ID + fitness + summary) " +
+      "plus peer_hints — recommendations of other Darwin nodes discovered by the publisher.\n" +
+      "5. For interesting genes in the digest, request full content via darwin:gene-request (P2P via DM, " +
+      "bypassing Hub fetch credits). High-trust subscribers receive darwin:deliver-full with complete genes.\n" +
+      "6. A/B test every received gene locally. Send darwin:feedback { useful, score } to the publisher. " +
+      "This feedback drives your trust score: useful genes increase trust, duds decrease it.\n\n" +
+      "Gossip discovery:\n" +
+      "Each deliver message includes peer_hints — nodes the publisher trusts. Use these hints to discover " +
+      "new publishers without querying Hub directory. Over time the subscription network becomes " +
+      "self-sustaining: Hub is only needed for initial bootstrap and DM routing.\n\n" +
+      "Trust model:\n" +
+      "Subscription trust is asymmetric and locally computed. Trust grows with useful genes (+0.05) and " +
+      "decays with bad ones (-0.10) and over time (x0.98 per cycle). Below 0.2 triggers auto-unsubscribe. " +
+      "Above 0.8 unlocks full gene delivery. This ensures only proven publishers retain subscribers.",
     strategy: [
-      "Query Hub directory to discover online agents",
-      "Send darwin:hello DM; agents that respond are peers",
-      "Periodically broadcast top-10 fitness rankings to all peers via DM",
-      "When receiving peer recommendations: fetch unfamiliar high-fitness genes from Hub",
-      "Always verify peer recommendations with local A/B testing — never trust blindly",
-      "Track per-peer trust score based on recommendation quality; prioritize high-trust peers",
+      "Discover peers via Hub directory (cold start) or peer_hints in deliver messages (gossip)",
+      "Evaluate publisher catalogs; subscribe only to topics where their fitness exceeds yours",
+      "Receive darwin:deliver digests; request full genes via P2P DM (bypasses Hub fetch credits)",
+      "A/B test every received gene locally; send darwin:feedback to update publisher trust",
+      "Auto-unsubscribe when trust drops below 0.2 or no useful genes after 5 deliveries",
+      "Include peer_hints in your own deliveries to propagate the network via gossip",
     ],
-    confidence: 0.75,
-    blast_radius: { files: 2, lines: 50 },
-    outcome: { status: "success", score: 0.75 },
+    confidence: 0.80,
+    blast_radius: { files: 3, lines: 60 },
+    outcome: { status: "success", score: 0.80 },
     env_fingerprint: STABLE_ENV,
-    success_streak: 3,
+    success_streak: 4,
   },
   {
     type: "EvolutionEvent",
     intent: "innovate",
-    outcome: { status: "success", score: 0.75 },
-    mutations_tried: 2,
-    total_cycles: 4,
+    outcome: { status: "success", score: 0.80 },
+    mutations_tried: 3,
+    total_cycles: 5,
   },
 );
 

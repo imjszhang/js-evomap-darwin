@@ -117,7 +117,9 @@ async function getDarwin(pluginCfg) {
 
   const { Darwin } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "index.js")).href);
   const { Mutator } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "mutator.js")).href);
-  const { PeerExchange } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "peer-exchange.js")).href);
+  const { Subscription } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "subscription.js")).href);
+  const { TrustPolicy } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "trust-policy.js")).href);
+  const { PeerGraph } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "peer-graph.js")).href);
   const { TaskMatcher } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "task-matcher.js")).href);
 
   const dataDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
@@ -132,7 +134,9 @@ async function getDarwin(pluginCfg) {
   });
 
   darwinInstance.use(new Mutator({ mutationRate: pluginCfg.mutationRate || 0.05 }));
-  darwinInstance.use(new PeerExchange({ hub: darwinInstance.hub, dataDir }));
+  const trustPolicy = new TrustPolicy({ dataDir });
+  const peerGraph = new PeerGraph({ dataDir, selfNodeId: darwinInstance.hub.nodeId });
+  darwinInstance.use(new Subscription({ hub: darwinInstance.hub, dataDir, trustPolicy, peerGraph }));
   darwinInstance.use(new TaskMatcher({ hub: darwinInstance.hub, dataDir }));
 
   darwinInstance.on("fetch", (data) => {
@@ -244,11 +248,28 @@ export default function register(api) {
   api.registerTool({
     name: "darwin_peers",
     label: "Darwin: Peer Network",
-    description: "View discovered peer agents and their trust scores.",
+    description: "View discovered Darwin peer agents, their fitness, and subscription relationships.",
     parameters: { type: "object", properties: {} },
     async execute() {
       try {
         const darwin = await getDarwin(pluginCfg);
+
+        if (darwin.subscription) {
+          const graph = darwin.subscription.graph;
+          const darwinNodes = graph.getDarwinNodes();
+          const subs = new Set(darwin.subscription.getSubscriptions().map((s) => s.nodeId));
+          const subscribers = new Set(darwin.subscription.getSubscribers().map((s) => s.nodeId));
+
+          return jsonResult(darwinNodes.map((p) => ({
+            nodeId: p.nodeId,
+            reportedFitness: p.reportedFitness,
+            topics: p.topics,
+            discoveredFrom: p.discoveredFrom,
+            subscribed: subs.has(p.nodeId),
+            isSubscriber: subscribers.has(p.nodeId),
+          })));
+        }
+
         const peers = darwin.peers?.getPeers() ?? [];
         return jsonResult(peers);
       } catch (err) {
@@ -503,6 +524,92 @@ export default function register(api) {
     },
   }, { optional: true });
 
+  api.registerTool({
+    name: "darwin_subscribe",
+    label: "Darwin: Subscription Management",
+    description:
+      "Manage gene subscriptions — subscribe/unsubscribe to Darwin nodes, " +
+      "view current subscriptions and subscribers.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", description: "Action: subscribe, unsubscribe, list_subscriptions, list_subscribers" },
+        nodeId: { type: "string", description: "Target node ID (for subscribe/unsubscribe)" },
+        topics: { type: "string", description: "Comma-separated topics (optional)" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const sub = darwin.subscription;
+        if (!sub) return textResult("Subscription module not attached.");
+
+        const topics = params.topics ? params.topics.split(",").map((t) => t.trim()) : [];
+
+        switch (params.action) {
+          case "subscribe": {
+            if (!params.nodeId) return textResult("nodeId required for subscribe.");
+            const result = await sub.subscribe(params.nodeId, topics);
+            return jsonResult(result);
+          }
+          case "unsubscribe": {
+            if (!params.nodeId) return textResult("nodeId required for unsubscribe.");
+            const result = await sub.unsubscribe(params.nodeId, topics);
+            return jsonResult(result);
+          }
+          case "list_subscriptions":
+            return jsonResult(sub.getSubscriptions());
+          case "list_subscribers":
+            return jsonResult(sub.getSubscribers());
+          default:
+            return jsonResult(sub.getStats());
+        }
+      } catch (err) {
+        return textResult(`Subscription operation failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_catalog",
+    label: "Darwin: Channel Catalog",
+    description: "View the local channel catalog — topics, gene counts, and fitness by channel.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const sub = darwin.subscription;
+        if (!sub) return textResult("Subscription module not attached.");
+        return jsonResult(sub.buildCatalog(darwin));
+      } catch (err) {
+        return textResult(`Catalog query failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_network",
+    label: "Darwin: Network Topology",
+    description:
+      "View the peer graph topology — discovered nodes, Darwin nodes, gossip vs directory discovery, " +
+      "trust policy, and subscription statistics.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const sub = darwin.subscription;
+        if (!sub) return textResult("Subscription module not attached.");
+        return jsonResult({
+          peerGraph: sub.graph.getStats(),
+          subscription: sub.getStats(),
+          trustPolicy: sub.policy.getStats(),
+        });
+      } catch (err) {
+        return textResult(`Network query failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
   // ── Gateway HTTP Routes: Dashboard + REST API ───────────────────────
 
   api.registerHttpRoute({
@@ -586,8 +693,62 @@ export default function register(api) {
     async handler(_req, res) {
       try {
         const darwin = await getDarwin(pluginCfg);
-        const peers = darwin.peers?.getPeers() ?? [];
-        sendJson(res, 200, peers);
+
+        if (darwin.subscription) {
+          const graph = darwin.subscription.graph;
+          const darwinNodes = graph.getDarwinNodes();
+          const subs = new Set(darwin.subscription.getSubscriptions().map((s) => s.nodeId));
+          const subscribers = new Set(darwin.subscription.getSubscribers().map((s) => s.nodeId));
+
+          sendJson(res, 200, darwinNodes.map((p) => ({
+            nodeId: p.nodeId,
+            reportedFitness: p.reportedFitness,
+            topics: p.topics,
+            discoveredFrom: p.discoveredFrom,
+            subscribed: subs.has(p.nodeId),
+            isSubscriber: subscribers.has(p.nodeId),
+          })));
+        } else {
+          const peers = darwin.peers?.getPeers() ?? [];
+          sendJson(res, 200, peers);
+        }
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/subscriptions`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const sub = darwin.subscription;
+        sendJson(res, 200, sub ? {
+          subscriptions: sub.getSubscriptions(),
+          subscribers: sub.getSubscribers(),
+          stats: sub.getStats(),
+        } : { subscriptions: [], subscribers: [], stats: null });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/network`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const sub = darwin.subscription;
+        sendJson(res, 200, sub ? {
+          peerGraph: sub.graph.getStats(),
+          trustPolicy: sub.policy.getStats(),
+        } : { peerGraph: null, trustPolicy: null });
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
@@ -833,6 +994,75 @@ export default function register(api) {
         .action(async () => {
           const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           await run("peers", []);
+        });
+
+      darwin
+        .command("subscribe <nodeId>")
+        .description("Subscribe to a Darwin node")
+        .option("--topic <topic>", "Topic to subscribe to")
+        .action(async (nodeId, opts) => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          const args = [nodeId];
+          if (opts.topic) args.push("--topic", opts.topic);
+          await run("subscribe", args);
+        });
+
+      darwin
+        .command("unsubscribe <nodeId>")
+        .description("Unsubscribe from a node")
+        .option("--topic <topic>", "Topic to unsubscribe from")
+        .action(async (nodeId, opts) => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          const args = [nodeId];
+          if (opts.topic) args.push("--topic", opts.topic);
+          await run("unsubscribe", args);
+        });
+
+      darwin
+        .command("subscriptions")
+        .description("View my subscriptions")
+        .action(async () => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          await run("subscriptions", []);
+        });
+
+      darwin
+        .command("subscribers")
+        .description("View who subscribes to me")
+        .action(async () => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          await run("subscribers", []);
+        });
+
+      darwin
+        .command("catalog")
+        .description("View channel catalog")
+        .action(async () => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          await run("catalog", []);
+        });
+
+      darwin
+        .command("trust")
+        .description("View or configure trust policy")
+        .option("--mode <mode>", "Set accept mode: open, mutual, selective")
+        .option("--block <nodeId>", "Block a node")
+        .option("--unblock <nodeId>", "Unblock a node")
+        .action(async (opts) => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          const args = [];
+          if (opts.mode) args.push("--mode", opts.mode);
+          if (opts.block) args.push("--block", opts.block);
+          if (opts.unblock) args.push("--unblock", opts.unblock);
+          await run("trust", args);
+        });
+
+      darwin
+        .command("network")
+        .description("View peer graph topology")
+        .action(async () => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          await run("network", []);
         });
 
       darwin

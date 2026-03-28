@@ -12,6 +12,9 @@ export { CapsuleSelector } from "./capsule-selector.js";
 export { Sponsor } from "./sponsor.js";
 export { Leaderboard } from "./leaderboard.js";
 export { TaskMatcher } from "./task-matcher.js";
+export { Subscription } from "./subscription.js";
+export { TrustPolicy } from "./trust-policy.js";
+export { PeerGraph } from "./peer-graph.js";
 
 const DEFAULT_HEARTBEAT_MS = 900_000; // 15 min
 const DEFAULT_EVOLVE_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -28,6 +31,7 @@ export class Darwin {
   #selector;
   #mutator;
   #peerExchange;
+  #subscription;
   #sponsor;
   #taskMatcher;
   #dataDir;
@@ -68,6 +72,7 @@ export class Darwin {
 
     this.#mutator = null;
     this.#peerExchange = null;
+    this.#subscription = null;
     this.#sponsor = null;
     this.#taskMatcher = null;
   }
@@ -78,6 +83,7 @@ export class Darwin {
   get selector() { return this.#selector; }
   get running() { return this.#running; }
   get peers() { return this.#peerExchange; }
+  get subscription() { return this.#subscription; }
   get sponsor() { return this.#sponsor; }
   get worker() { return this.#taskMatcher; }
   get lastHeartbeat() { return this.#lastHeartbeatResult; }
@@ -97,6 +103,8 @@ export class Darwin {
     const name = module.constructor?.name;
     if (name === "Mutator") {
       this.#mutator = module;
+    } else if (name === "Subscription") {
+      this.#subscription = module;
     } else if (name === "PeerExchange") {
       this.#peerExchange = module;
     } else if (name === "Sponsor") {
@@ -242,8 +250,10 @@ export class Darwin {
       tokenBaseline: fitnessStats.totalBaselineTokens,
       tokenDarwin: fitnessStats.totalTokensUsed,
       hasMutator: !!this.#mutator,
+      hasSubscription: !!this.#subscription,
       hasPeerExchange: !!this.#peerExchange,
       peerCount: this.#peerExchange?.peerCount ?? 0,
+      subscription: this.#subscription?.getStats() ?? null,
       hasSponsor: !!this.#sponsor,
       sponsor: this.#sponsor?.getStats() ?? null,
       worker: this.#taskMatcher?.getStats() ?? null,
@@ -296,8 +306,10 @@ export class Darwin {
         }
       }
 
-      // 3. Peer exchange (if attached)
-      if (this.#peerExchange && typeof this.#peerExchange.cycle === "function") {
+      // 3. Subscription system (preferred) or legacy peer exchange
+      if (this.#subscription && typeof this.#subscription.cycle === "function") {
+        await this.#subscription.cycle(this);
+      } else if (this.#peerExchange && typeof this.#peerExchange.cycle === "function") {
         await this.#peerExchange.cycle(this);
       }
 

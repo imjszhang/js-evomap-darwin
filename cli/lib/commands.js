@@ -1,11 +1,14 @@
 import { Darwin } from "../../src/index.js";
 import { Mutator } from "../../src/mutator.js";
 import { PeerExchange } from "../../src/peer-exchange.js";
+import { Subscription } from "../../src/subscription.js";
+import { TrustPolicy } from "../../src/trust-policy.js";
+import { PeerGraph } from "../../src/peer-graph.js";
 import { TaskMatcher } from "../../src/task-matcher.js";
 
 const DATA_DIR = process.env.DARWIN_DATA_DIR || "./data";
 
-function createDarwin({ withWorker = false } = {}) {
+function createDarwin({ withWorker = false, legacyPeers = false } = {}) {
   const darwin = new Darwin({
     hubUrl: process.env.HUB_URL,
     dataDir: DATA_DIR,
@@ -13,7 +16,15 @@ function createDarwin({ withWorker = false } = {}) {
     nodeSecret: process.env.NODE_SECRET,
   });
   darwin.use(new Mutator());
-  darwin.use(new PeerExchange({ hub: darwin.hub, dataDir: DATA_DIR }));
+
+  if (legacyPeers) {
+    darwin.use(new PeerExchange({ hub: darwin.hub, dataDir: DATA_DIR }));
+  } else {
+    const trustPolicy = new TrustPolicy({ dataDir: DATA_DIR });
+    const peerGraph = new PeerGraph({ dataDir: DATA_DIR, selfNodeId: darwin.hub.nodeId });
+    darwin.use(new Subscription({ hub: darwin.hub, dataDir: DATA_DIR, trustPolicy, peerGraph }));
+  }
+
   if (withWorker) {
     darwin.use(new TaskMatcher({ hub: darwin.hub, dataDir: DATA_DIR }));
   }
@@ -71,7 +82,8 @@ async function cmdStatus() {
   console.log(`  Hub:             ${s.hubUrl}`);
   console.log(`  Running:         ${s.running}`);
   console.log(`  Mutator:         ${s.hasMutator ? "attached" : "not attached"}`);
-  console.log(`  Peer Exchange:   ${s.hasPeerExchange ? "attached" : "not attached"}`);
+  console.log(`  Subscription:    ${s.hasSubscription ? `attached (${s.subscription?.subscriptions ?? 0} subs, ${s.subscription?.subscribers ?? 0} subscribers)` : "not attached"}`);
+  console.log(`  Peer Exchange:   ${s.hasPeerExchange ? "attached (legacy)" : "not attached"}`);
   console.log(`  Peers:           ${s.peerCount}`);
   console.log(`  Sponsor:         ${s.hasSponsor ? `${s.sponsor?.totalGrants ?? 0} grants` : "not attached"}`);
   console.log("");
@@ -179,8 +191,35 @@ async function cmdGenes(args) {
 
 async function cmdPeers() {
   const darwin = createDarwin();
-  const peers = darwin.peers?.getPeers() ?? [];
 
+  // Subscription mode: show PeerGraph Darwin nodes + subscription status
+  if (darwin.subscription) {
+    const graph = darwin.subscription.graph;
+    const darwinNodes = graph.getDarwinNodes();
+    const subs = new Set(darwin.subscription.getSubscriptions().map((s) => s.nodeId));
+    const subscribers = new Set(darwin.subscription.getSubscribers().map((s) => s.nodeId));
+
+    console.log(`\n  ── Peers (${darwinNodes.length} Darwin nodes) ──\n`);
+    if (darwinNodes.length === 0) {
+      console.log("  No Darwin peers discovered yet. Run 'darwin start' to discover neighbors.\n");
+      console.log("  Tip: use 'darwin network' for full topology, 'darwin subscriptions' for subscriptions.\n");
+      return;
+    }
+    for (const p of darwinNodes) {
+      const id = p.nodeId.length > 24 ? p.nodeId.slice(0, 24) + "..." : p.nodeId;
+      const relation = [];
+      if (subs.has(p.nodeId)) relation.push("subscribed");
+      if (subscribers.has(p.nodeId)) relation.push("subscriber");
+      const rel = relation.length > 0 ? relation.join("+") : "known";
+      const source = p.discoveredFrom ? "gossip" : "directory";
+      console.log(`  ${id}  fitness: ${p.reportedFitness.toFixed(2)}  [${rel}]  via: ${source}`);
+    }
+    console.log("");
+    return;
+  }
+
+  // Legacy PeerExchange mode
+  const peers = darwin.peers?.getPeers() ?? [];
   console.log(`\n  ── Peers (${peers.length}) ──\n`);
   if (peers.length === 0) {
     console.log("  No peers discovered yet. Run 'darwin start' to discover neighbors.\n");
@@ -472,6 +511,182 @@ async function cmdWorker(args) {
   }
 }
 
+async function cmdSubscribe(args) {
+  const flags = parseFlags(args);
+  const nodeId = flags._positional?.[0];
+  if (!nodeId) {
+    console.log("\n  Usage: darwin subscribe <nodeId> [--topic <topic>]\n");
+    return;
+  }
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+
+  const topics = flags.topic ? [flags.topic] : [];
+  const result = await darwin.subscription.subscribe(nodeId, topics);
+
+  if (result.ok) {
+    console.log(`\n  Subscribed to ${nodeId}${topics.length ? ` (topics: ${topics.join(", ")})` : ""}\n`);
+  } else {
+    console.log(`\n  Subscribe failed: ${result.reason}\n`);
+  }
+}
+
+async function cmdUnsubscribe(args) {
+  const flags = parseFlags(args);
+  const nodeId = flags._positional?.[0];
+  if (!nodeId) {
+    console.log("\n  Usage: darwin unsubscribe <nodeId> [--topic <topic>]\n");
+    return;
+  }
+  const darwin = createDarwin();
+  const topics = flags.topic ? [flags.topic] : [];
+  await darwin.subscription.unsubscribe(nodeId, topics);
+  console.log(`\n  Unsubscribed from ${nodeId}${topics.length ? ` (topics: ${topics.join(", ")})` : " (all topics)"}\n`);
+}
+
+async function cmdSubscriptions() {
+  const darwin = createDarwin();
+  const subs = darwin.subscription?.getSubscriptions() ?? [];
+
+  console.log(`\n  ── My Subscriptions (${subs.length}) ──\n`);
+  if (subs.length === 0) {
+    console.log("  No active subscriptions. Use 'darwin subscribe <nodeId>' to subscribe.\n");
+    return;
+  }
+
+  for (const s of subs) {
+    const id = s.nodeId.length > 24 ? s.nodeId.slice(0, 24) + "..." : s.nodeId;
+    const topics = s.topics.length > 0 ? s.topics.join(", ") : "(all)";
+    console.log(`  ${id}  trust: ${s.trust.toFixed(2)}  recv: ${s.deliveriesReceived}  useful: ${s.genesUseful}  topics: ${topics}`);
+  }
+  console.log("");
+}
+
+async function cmdSubscribers() {
+  const darwin = createDarwin();
+  const subs = darwin.subscription?.getSubscribers() ?? [];
+
+  console.log(`\n  ── My Subscribers (${subs.length}) ──\n`);
+  if (subs.length === 0) {
+    console.log("  No subscribers yet. Other Darwin nodes will discover and subscribe to you.\n");
+    return;
+  }
+
+  for (const s of subs) {
+    const id = s.nodeId.length > 24 ? s.nodeId.slice(0, 24) + "..." : s.nodeId;
+    const topics = s.topics.length > 0 ? s.topics.join(", ") : "(all)";
+    console.log(`  ${id}  feedback: ${s.feedbackScore.toFixed(2)}  sent: ${s.deliveriesSent}  topics: ${topics}`);
+  }
+  console.log("");
+}
+
+async function cmdCatalog(args) {
+  const flags = parseFlags(args);
+  const darwin = createDarwin();
+  const catalog = darwin.subscription?.buildCatalog(darwin);
+
+  if (!catalog) {
+    console.log("\n  Subscription module not attached.\n");
+    return;
+  }
+
+  console.log(`\n  ── Channel Catalog ──\n`);
+  console.log(`  Subscribers: ${catalog.subscriberCount}\n`);
+
+  if (catalog.channels.length === 0) {
+    console.log("  No channels yet. Ingest genes with 'darwin start' to populate.\n");
+    return;
+  }
+
+  console.log("  Topic                     Genes  Avg Fitness  Samples");
+  console.log("  ────────────────────────  ─────  ──────────  ───────");
+  for (const ch of catalog.channels) {
+    const topic = ch.topic.padEnd(24);
+    console.log(`  ${topic}  ${String(ch.genes).padStart(5)}  ${ch.avgFitness.toFixed(3).padStart(10)}  ${String(ch.samples).padStart(7)}`);
+  }
+  console.log("");
+}
+
+async function cmdTrust(args) {
+  const flags = parseFlags(args);
+  const darwin = createDarwin();
+  const policy = darwin.subscription?.policy;
+
+  if (!policy) {
+    console.log("\n  Subscription module not attached.\n");
+    return;
+  }
+
+  if (flags.mode) {
+    const ok = policy.setAcceptMode(flags.mode);
+    if (ok) {
+      console.log(`\n  Accept mode set to: ${flags.mode}\n`);
+    } else {
+      console.log(`\n  Invalid mode. Use: open, mutual, or selective\n`);
+    }
+    return;
+  }
+
+  if (flags.block) {
+    policy.block(flags.block);
+    console.log(`\n  Blocked node: ${flags.block}\n`);
+    return;
+  }
+
+  if (flags.unblock) {
+    const removed = policy.unblock(flags.unblock);
+    console.log(removed
+      ? `\n  Unblocked node: ${flags.unblock}\n`
+      : `\n  Node ${flags.unblock} was not in block list.\n`);
+    return;
+  }
+
+  const stats = policy.getStats();
+  console.log("\n  ── Trust Policy ──\n");
+  console.log(`  Accept Mode:    ${stats.acceptMode}`);
+  console.log(`  Threshold:      ${stats.selectiveThreshold} (for selective mode)`);
+  console.log(`  Max Subscribers: ${stats.maxSubscribers}`);
+  console.log(`  Max Subscriptions: ${stats.maxSubscriptions}`);
+  console.log(`  Blocked Nodes:  ${stats.blockedCount}`);
+  if (stats.blockedNodes.length > 0) {
+    for (const id of stats.blockedNodes) {
+      console.log(`    - ${id}`);
+    }
+  }
+  console.log("");
+}
+
+async function cmdNetwork() {
+  const darwin = createDarwin();
+  const graph = darwin.subscription?.graph;
+
+  if (!graph) {
+    console.log("\n  Subscription module not attached.\n");
+    return;
+  }
+
+  const stats = graph.getStats();
+  const subStats = darwin.subscription.getStats();
+
+  console.log("\n  ── Network Topology ──\n");
+  console.log(`  Total Known Peers:   ${stats.totalPeers}`);
+  console.log(`  Darwin Nodes:        ${stats.darwinNodes}`);
+  console.log(`  Contacted:           ${stats.contacted}`);
+  console.log(`  From Hub Directory:  ${stats.fromDirectory}`);
+  console.log(`  From Gossip:         ${stats.fromGossip}`);
+  console.log("");
+  console.log("  ── Subscription Stats ──");
+  console.log(`  My Subscriptions:    ${subStats.subscriptions}`);
+  console.log(`  My Subscribers:      ${subStats.subscribers}`);
+  console.log(`  Avg Trust:           ${subStats.avgTrust.toFixed(3)}`);
+  console.log(`  Avg Feedback Score:  ${subStats.avgFeedbackScore.toFixed(3)}`);
+  console.log(`  Pending Deliveries:  ${subStats.pendingDeliveries}`);
+  console.log("");
+}
+
 async function cmdResearch(args) {
   const flags = parseFlags(args);
   const { research } = await import("../../scripts/research-platform.js");
@@ -490,7 +705,14 @@ function cmdHelp() {
     start                   Start the evolution loop
     fitness [--task-type X] View fitness rankings
     genes [--top N]         View local gene pool
-    peers                   View neighbor list
+    peers                   View neighbor list (legacy)
+    subscribe <nodeId> [--topic X]  Subscribe to a Darwin node
+    unsubscribe <nodeId> [--topic X]  Unsubscribe from a node
+    subscriptions           View my outgoing subscriptions
+    subscribers             View who subscribes to me
+    catalog                 View my channel catalog
+    trust [--mode M] [--block/--unblock nodeId]  Trust policy
+    network                 View peer graph topology
     leaderboard [--task-type X]  View model performance rankings
     sponsor [--add ...]     View or add sponsor grants
     worker [--enable|--disable|--scan|--claim <id>|--domains x,y]
@@ -517,6 +739,13 @@ const COMMANDS = {
   fitness: cmdFitness,
   genes: cmdGenes,
   peers: cmdPeers,
+  subscribe: cmdSubscribe,
+  unsubscribe: cmdUnsubscribe,
+  subscriptions: cmdSubscriptions,
+  subscribers: cmdSubscribers,
+  catalog: cmdCatalog,
+  trust: cmdTrust,
+  network: cmdNetwork,
   leaderboard: cmdLeaderboard,
   sponsor: cmdSponsor,
   worker: cmdWorker,
