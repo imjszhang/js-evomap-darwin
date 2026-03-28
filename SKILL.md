@@ -1,3 +1,20 @@
+---
+name: js-evomap-darwin
+description: Darwin Evolution Engine for EvoMap — fitness memory, adaptive selection, parameter mutation, peer gene exchange, sponsor-subsidized evolution, and model performance leaderboards.
+version: 1.0.0
+metadata:
+  openclaw:
+    emoji: "\U0001F9EC"
+    homepage: https://github.com/nicejszhang/js-evomap-darwin
+    os:
+      - windows
+      - macos
+      - linux
+    requires:
+      bins:
+        - node
+---
+
 # Darwin Evolution Engine for EvoMap
 
 ## Overview
@@ -15,6 +32,139 @@ EvoMap 1.0 ranks Capsules by self-reported confidence and community voting. In p
 - Token suppliers have zero participation in the ecosystem
 
 Darwin solves these problems at the agent level, without requiring any changes to the Hub — and creates a three-way value loop between agents, token suppliers, and the platform.
+
+## First Step: Detect Runtime Mode
+
+Before performing any operation, detect whether this project is running as an **OpenClaw plugin** or in **standalone CLI mode**. The result determines configuration paths, command prefixes, and available features.
+
+### Detection Steps
+
+#### Step 0 — OS & Environment Variable Probe
+
+First detect the current operating system to choose the correct shell commands, then check OpenClaw-related environment variables:
+
+**OS Detection:**
+
+| Check | Windows | macOS / Linux |
+|-------|---------|---------------|
+| OS identification | `echo %OS%` or `$env:OS` (PowerShell) | `uname -s` |
+| Home directory | `%USERPROFILE%` | `$HOME` |
+| Default OpenClaw state dir | `%USERPROFILE%\.openclaw\` | `~/.openclaw/` |
+| Default config path | `%USERPROFILE%\.openclaw\openclaw.json` | `~/.openclaw/openclaw.json` |
+
+**Environment Variable Check:**
+
+```bash
+# Windows (PowerShell)
+Get-ChildItem Env: | Where-Object { $_.Name -match '^OPENCLAW_' }
+
+# Windows (CMD / Git Bash)
+set | grep -iE "^OPENCLAW_"
+
+# macOS / Linux
+env | grep -iE "^OPENCLAW_"
+```
+
+| Variable | Meaning if set |
+|----------|---------------|
+| `OPENCLAW_CONFIG_PATH` | Direct path to config file — **highest priority**, use as-is |
+| `OPENCLAW_STATE_DIR` | OpenClaw state directory — config file at `$OPENCLAW_STATE_DIR/openclaw.json` |
+| `OPENCLAW_HOME` | Custom home directory — state dir resolves to `$OPENCLAW_HOME/.openclaw/` |
+
+**OpenClaw config file resolution order** (first match wins):
+
+1. `OPENCLAW_CONFIG_PATH` is set → use that file directly
+2. `OPENCLAW_STATE_DIR` is set → `$OPENCLAW_STATE_DIR/openclaw.json`
+3. `OPENCLAW_HOME` is set → `$OPENCLAW_HOME/.openclaw/openclaw.json`
+4. None set → default `~/.openclaw/openclaw.json` (Windows: `%USERPROFILE%\.openclaw\openclaw.json`)
+
+Use the resolved config path in all subsequent steps.
+
+#### Step 1 — OpenClaw Binary Detection
+
+1. Check if `openclaw` command exists on PATH (Windows: `where openclaw`, macOS/Linux: `which openclaw`)
+2. If exists, read the OpenClaw config file (path resolved by Step 0) and look for `js-evomap-darwin` in `plugins.entries` with `enabled: true`
+3. Verify that `plugins.load.paths` contains a path pointing to this project's `openclaw-plugin/` directory
+
+If **all three checks pass** → use **OpenClaw Plugin Mode**. Otherwise → use **Standalone CLI Mode**.
+
+### Mode Comparison
+
+| Aspect | OpenClaw Plugin Mode | Standalone CLI Mode |
+|--------|---------------------|-------------------|
+| Configuration | `~/.openclaw/openclaw.json` → `plugins.entries.js-evomap-darwin.config` | `.env` file in project root |
+| Command prefix | `openclaw darwin <cmd>` | `node cli.js <cmd>` (or `darwin <cmd>` if globally linked) |
+| AI tools | `darwin_*` (8 tools via OpenClaw Agent) | Not available (use CLI) |
+| Web Dashboard | `http://<host>/plugins/js-evomap-darwin/` | `darwin dashboard` (local server) |
+
+### OpenClaw Plugin Mode
+
+When the plugin is deployed:
+
+- **CLI**: always use `openclaw darwin ...` instead of `darwin ...` or direct node invocation
+- **AI tools**: prefer `darwin_*` tools when invoked from an OpenClaw Agent session
+- **Config**: modify `~/.openclaw/openclaw.json` → `plugins.entries["js-evomap-darwin"].config` for Hub URL, gene capacity, exploration rate, etc.; do NOT edit `.env` for plugin-managed settings
+- **Web Dashboard**: access at `http://<openclaw-host>/plugins/js-evomap-darwin/`
+
+### Standalone CLI Mode
+
+When running without OpenClaw:
+
+- **CLI**: use `darwin <cmd>` or `node cli.js <cmd>`
+- **Config**: `.env` for Hub URL and credentials (see environment variable table below)
+- **No AI tools** — all interaction through CLI commands
+- **Dashboard**: `darwin dashboard` launches a local web server
+
+---
+
+## Prerequisites
+
+- **Node.js** >= 18
+- **EvoMap Hub** access (for gene pool sync, peer exchange, and leaderboard)
+
+## Install
+
+### Option A — As OpenClaw Plugin (recommended)
+
+1. Clone or download the repository
+2. Run `npm install` in the project root
+3. Register the plugin:
+
+Add to `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "plugins": {
+    "load": {
+      "paths": ["/path/to/js-evomap-darwin/openclaw-plugin"]
+    },
+    "entries": {
+      "js-evomap-darwin": {
+        "enabled": true,
+        "config": {
+          "hubUrl": "https://evomap.ai",
+          "geneCapacity": 200,
+          "explorationRate": 0.1,
+          "mutationRate": 0.05
+        }
+      }
+    }
+  }
+}
+```
+
+4. Restart OpenClaw to load the plugin
+5. Verify: `openclaw darwin status`
+
+### Option B — Standalone
+
+1. Clone or download the repository
+2. Run `npm install` in the project root
+3. Copy `.env.example` to `.env` and fill in Hub URL and credentials
+4. Use `darwin <cmd>` or `node cli.js <cmd>` for all operations
+5. Verify: `darwin status`
+
+---
 
 ## Core Concepts
 
@@ -136,37 +286,19 @@ darwin dashboard               # Real-time visualization (8 panels)
 
 ## OpenClaw Plugin
 
-Available as an OpenClaw plugin with 8 tools and a web dashboard.
+Available as an OpenClaw plugin with 8 tools and a web dashboard. See the **Install** section above for registration steps.
 
-### Configuration
+### Plugin Configuration
 
-Add the plugin path and config to your OpenClaw configuration:
-
-```json5
-{
-  plugins: {
-    load: {
-      paths: ["/path/to/js-evomap-darwin/openclaw-plugin"]
-    },
-    entries: {
-      "js-evomap-darwin": {
-        config: {
-          hubUrl: "https://evomap.ai",
-          geneCapacity: 200,
-          explorationRate: 0.1,
-          mutationRate: 0.05,
-          // dataDir: "/custom/path/to/data"  (defaults to <project>/data)
-          // nodeId: ""      (auto-assigned by Hub)
-          // nodeSecret: ""  (auto-assigned by Hub)
-        }
-      }
-    }
-  },
-  tools: {
-    allow: ["js-evomap-darwin"]
-  }
-}
-```
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `hubUrl` | string | `"https://evomap.ai"` | EvoMap Hub URL |
+| `geneCapacity` | number | `200` | Max genes in local pool |
+| `explorationRate` | number | `0.1` | Probability of exploring untested Capsules |
+| `mutationRate` | number | `0.05` | Probability of mutating high-fitness Capsules |
+| `dataDir` | string | `"<project>/data"` | Local data directory |
+| `nodeId` | string | `""` | Node identifier (auto-assigned by Hub) |
+| `nodeSecret` | string | `""` | Node secret (auto-assigned by Hub) |
 
 ### Tools
 
