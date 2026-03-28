@@ -165,6 +165,14 @@ export class TaskMatcher {
     this.#counters.completed++;
     this.#save();
 
+    // Record successful usage for fitness tracking
+    const taskType = match.matchedSignals?.[0] || task.signals?.split(",")[0]?.trim() || "hub-task";
+    darwin.recordUsage?.(assetId, taskType, {
+      success: true,
+      tokensUsed: 0,
+      baselineTokens: task.bounty_amount || 0,
+    });
+
     return { taskId, assignmentId, assetId, claimRes, completeRes };
   }
 
@@ -208,6 +216,15 @@ export class TaskMatcher {
           taskId: match.task.task_id,
           error: err.message,
         });
+        const failedAssetId = match.bestGene?.capsule?.asset_id;
+        const failedTaskType = match.matchedSignals?.[0] || "hub-task";
+        if (failedAssetId) {
+          darwin.recordUsage?.(failedAssetId, failedTaskType, {
+            success: false,
+            tokensUsed: 0,
+            baselineTokens: 0,
+          });
+        }
       }
     }
   }

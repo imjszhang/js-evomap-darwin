@@ -4,11 +4,13 @@ import { HubClient } from "./hub-client.js";
 import { GeneStore } from "./gene-store.js";
 import { FitnessTracker } from "./fitness-tracker.js";
 import { CapsuleSelector } from "./capsule-selector.js";
+import { BootstrapEvaluator } from "./bootstrap-evaluator.js";
 
 export { HubClient } from "./hub-client.js";
 export { GeneStore } from "./gene-store.js";
 export { FitnessTracker } from "./fitness-tracker.js";
 export { CapsuleSelector } from "./capsule-selector.js";
+export { BootstrapEvaluator } from "./bootstrap-evaluator.js";
 export { Sponsor } from "./sponsor.js";
 export { Leaderboard } from "./leaderboard.js";
 export { TaskMatcher } from "./task-matcher.js";
@@ -157,6 +159,9 @@ export class Darwin {
     const hbInterval = heartbeatMs || DEFAULT_HEARTBEAT_MS;
     const evInterval = evolveMs || DEFAULT_EVOLVE_MS;
 
+    // Bootstrap: seed structural fitness scores when gene pool has no real data
+    this.#runBootstrap();
+
     // Initial heartbeat
     await this.#doHeartbeat();
 
@@ -288,6 +293,25 @@ export class Darwin {
   }
 
   // ── Private ───────────────────────────────────────────────────────────
+
+  #runBootstrap() {
+    try {
+      const hasRealData = this.#tracker.rankAll().length > 0;
+      if (hasRealData) return;
+
+      const evaluator = new BootstrapEvaluator({ dataDir: this.#dataDir });
+      if (evaluator.alreadyDone) return;
+
+      if (this.#store.size === 0) return;
+
+      const result = evaluator.evaluate(this.#store);
+      if (result) {
+        this.#emit("bootstrap", result);
+      }
+    } catch {
+      // Bootstrap is best-effort — never block startup
+    }
+  }
 
   async #doHeartbeat() {
     try {

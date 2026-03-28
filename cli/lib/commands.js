@@ -189,6 +189,95 @@ async function cmdGenes(args) {
   console.log(`\n  Total: ${darwin.store.size} / ${darwin.store.capacity}\n`);
 }
 
+async function cmdSelect(args) {
+  const flags = parseFlags(args);
+  const taskType = flags._positional?.[0];
+  if (!taskType) {
+    console.log("\n  Usage: darwin select <taskType> [--count N]\n");
+    return;
+  }
+  const count = parseInt(flags.count || "1", 10);
+  const darwin = createDarwin();
+
+  if (count > 1) {
+    const candidates = darwin.selector.rankCandidates(taskType);
+    console.log(`\n  ── Top ${count} Capsules for "${taskType}" ──\n`);
+    if (candidates.length === 0) {
+      console.log(`  No capsules found for task type "${taskType}".\n`);
+      return;
+    }
+    for (const c of candidates.slice(0, count)) {
+      const id = c.capsule?.asset_id || "?";
+      const shortId = id.length > 24 ? id.slice(0, 24) + "..." : id;
+      console.log(`  ${shortId}  fitness: ${c.fitness ?? "?"} (${c.samples} samples)  source: ${c.source}`);
+      if (c.capsule?.strategy?.length) {
+        console.log(`    strategy: ${c.capsule.strategy.length} step(s)`);
+      }
+    }
+    console.log("");
+    return;
+  }
+
+  const result = darwin.selectCapsule(taskType);
+  if (!result) {
+    console.log(`\n  No capsules found for task type "${taskType}".\n`);
+    return;
+  }
+
+  const cap = result.capsule;
+  console.log(`\n  ── Selected Capsule for "${taskType}" ──\n`);
+  console.log(`  Asset ID:   ${cap.asset_id}`);
+  console.log(`  Reason:     ${result.reason}`);
+  console.log(`  Source:     ${result.source}`);
+  if (cap.summary) console.log(`  Summary:    ${cap.summary}`);
+  if (cap.content) {
+    console.log(`\n  ── Content ──\n`);
+    console.log(`  ${cap.content.slice(0, 500)}`);
+  }
+  if (cap.strategy?.length) {
+    console.log(`\n  ── Strategy (${cap.strategy.length} steps) ──\n`);
+    for (let i = 0; i < cap.strategy.length; i++) {
+      console.log(`  ${i + 1}. ${cap.strategy[i]}`);
+    }
+  }
+  console.log(`\n  Use 'darwin record ${cap.asset_id} ${taskType} --success' after completing the task.\n`);
+}
+
+async function cmdRecord(args) {
+  const flags = parseFlags(args);
+  const positional = flags._positional || [];
+  const capsuleId = positional[0];
+  const taskType = positional[1];
+
+  if (!capsuleId || !taskType) {
+    console.log("\n  Usage: darwin record <capsuleId> <taskType> --success|--fail [--tokens-used N] [--baseline-tokens N] [--model M]\n");
+    return;
+  }
+
+  const success = flags.success === true || (flags.fail ? false : undefined);
+  if (success === undefined) {
+    console.log("\n  Must specify --success or --fail.\n");
+    return;
+  }
+
+  const darwin = createDarwin();
+  const { fitness } = darwin.recordUsage(capsuleId, taskType, {
+    success,
+    tokensUsed: parseInt(flags["tokens-used"] || "0", 10),
+    baselineTokens: parseInt(flags["baseline-tokens"] || "0", 10),
+    model: flags.model || undefined,
+  });
+
+  const totalSamples = darwin.tracker.getSampleCount(capsuleId);
+  console.log(`\n  ── Recorded ──\n`);
+  console.log(`  Capsule:   ${capsuleId.length > 32 ? capsuleId.slice(0, 32) + "..." : capsuleId}`);
+  console.log(`  Task Type: ${taskType}`);
+  console.log(`  Success:   ${success}`);
+  console.log(`  Fitness:   ${fitness !== null ? fitness.toFixed(3) : "(need more samples)"}`);
+  console.log(`  Samples:   ${totalSamples}`);
+  console.log("");
+}
+
 async function cmdPeers() {
   const darwin = createDarwin();
 
@@ -705,6 +794,8 @@ function cmdHelp() {
     start                   Start the evolution loop
     fitness [--task-type X] View fitness rankings
     genes [--top N]         View local gene pool
+    select <taskType> [--count N]  Select best capsule for a task
+    record <id> <type> --success|--fail  Record capsule usage result
     peers                   View neighbor list (legacy)
     subscribe <nodeId> [--topic X]  Subscribe to a Darwin node
     unsubscribe <nodeId> [--topic X]  Unsubscribe from a node
@@ -738,6 +829,8 @@ const COMMANDS = {
   start: cmdStart,
   fitness: cmdFitness,
   genes: cmdGenes,
+  select: cmdSelect,
+  record: cmdRecord,
   peers: cmdPeers,
   subscribe: cmdSubscribe,
   unsubscribe: cmdUnsubscribe,

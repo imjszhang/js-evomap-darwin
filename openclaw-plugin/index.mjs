@@ -23,7 +23,7 @@ function sendJson(res, statusCode, body) {
   res.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   });
   res.end(payload);
@@ -39,6 +39,17 @@ function serveStaticFile(res, filePath) {
   });
   res.writeHead(200, { "Content-Type": mime });
   stream.pipe(res);
+}
+
+function parseJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+    });
+    req.on("error", reject);
+  });
 }
 
 function textResult(text) {
@@ -162,6 +173,9 @@ async function getDarwin(pluginCfg) {
   });
   darwinInstance.on("task-failed", (data) => {
     pushEvent("task-failed", `Task ${data.taskId} failed: ${data.error}`);
+  });
+  darwinInstance.on("bootstrap", (data) => {
+    pushEvent("bootstrap", `Bootstrap evaluated ${data.evaluated} capsule(s), avg score: ${data.avgScore}`);
   });
 
   return darwinInstance;
@@ -610,6 +624,101 @@ export default function register(api) {
     },
   }, { optional: true });
 
+  api.registerTool({
+    name: "darwin_select",
+    label: "Darwin: Select Capsule",
+    description:
+      "Select the best Capsule strategy for a given task type. " +
+      "Returns the capsule content/strategy so you can follow it when executing the task. " +
+      "After completing the task, call darwin_record to report the result.",
+    parameters: {
+      type: "object",
+      properties: {
+        taskType: { type: "string", description: "The task type / signal to match (required)" },
+        count: { type: "number", description: "Number of candidates to return (default 1)" },
+      },
+      required: ["taskType"],
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const count = params.count || 1;
+
+        if (count > 1) {
+          const candidates = darwin.selector.rankCandidates(params.taskType);
+          if (candidates.length === 0) {
+            return textResult(`No capsules found for task type "${params.taskType}".`);
+          }
+          return jsonResult(candidates.slice(0, count).map((c) => ({
+            assetId: c.capsule?.asset_id,
+            source: c.source,
+            fitness: c.fitness,
+            samples: c.samples,
+            content: c.capsule?.content,
+            strategy: c.capsule?.strategy,
+            triggers: c.capsule?.trigger || c.capsule?.signals_match,
+          })));
+        }
+
+        const result = darwin.selectCapsule(params.taskType);
+        if (!result) {
+          return textResult(`No capsules found for task type "${params.taskType}".`);
+        }
+        return jsonResult({
+          assetId: result.capsule?.asset_id,
+          reason: result.reason,
+          source: result.source,
+          content: result.capsule?.content,
+          strategy: result.capsule?.strategy,
+          triggers: result.capsule?.trigger || result.capsule?.signals_match,
+        });
+      } catch (err) {
+        return textResult(`Select failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_record",
+    label: "Darwin: Record Usage",
+    description:
+      "Record a Capsule usage result to update fitness scores. " +
+      "Call this after using a capsule strategy (from darwin_select) to complete a task.",
+    parameters: {
+      type: "object",
+      properties: {
+        capsuleId: { type: "string", description: "The asset_id of the capsule used" },
+        taskType: { type: "string", description: "The task type / signal" },
+        success: { type: "boolean", description: "Whether the task was completed successfully" },
+        tokensUsed: { type: "number", description: "Tokens consumed during execution (optional)" },
+        baselineTokens: { type: "number", description: "Tokens that would be used without the capsule (optional)" },
+        model: { type: "string", description: "AI model used for execution (optional)" },
+      },
+      required: ["capsuleId", "taskType", "success"],
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const { entry, fitness } = darwin.recordUsage(params.capsuleId, params.taskType, {
+          success: params.success,
+          tokensUsed: params.tokensUsed || 0,
+          baselineTokens: params.baselineTokens || 0,
+          model: params.model || undefined,
+        });
+        return jsonResult({
+          recorded: true,
+          capsuleId: params.capsuleId,
+          taskType: params.taskType,
+          success: params.success,
+          fitness,
+          totalSamples: darwin.tracker.getSampleCount(params.capsuleId),
+        });
+      } catch (err) {
+        return textResult(`Record failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
   // ── Gateway HTTP Routes: Dashboard + REST API ───────────────────────
 
   api.registerHttpRoute({
@@ -848,6 +957,94 @@ export default function register(api) {
   });
 
   api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/select`,
+    auth: "plugin",
+    async handler(req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        const taskType = parsed.searchParams.get("taskType");
+        if (!taskType) {
+          sendJson(res, 400, { error: "taskType query parameter is required" });
+          return true;
+        }
+        const count = parseInt(parsed.searchParams.get("count") || "1", 10);
+
+        if (count > 1) {
+          const candidates = darwin.selector.rankCandidates(taskType);
+          sendJson(res, 200, candidates.slice(0, count).map((c) => ({
+            assetId: c.capsule?.asset_id,
+            source: c.source,
+            fitness: c.fitness,
+            samples: c.samples,
+            content: c.capsule?.content,
+            strategy: c.capsule?.strategy,
+            triggers: c.capsule?.trigger || c.capsule?.signals_match,
+          })));
+        } else {
+          const result = darwin.selectCapsule(taskType);
+          sendJson(res, 200, result ? {
+            assetId: result.capsule?.asset_id,
+            reason: result.reason,
+            source: result.source,
+            content: result.capsule?.content,
+            strategy: result.capsule?.strategy,
+            triggers: result.capsule?.trigger || result.capsule?.signals_match,
+          } : null);
+        }
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/record`,
+    auth: "plugin",
+    async handler(req, res) {
+      if (req.method === "OPTIONS") {
+        res.writeHead(204, {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+        });
+        res.end();
+        return true;
+      }
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "POST method required" });
+        return true;
+      }
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const body = await parseJsonBody(req);
+        if (!body.capsuleId || !body.taskType || body.success === undefined) {
+          sendJson(res, 400, { error: "capsuleId, taskType, and success are required" });
+          return true;
+        }
+        const { entry, fitness } = darwin.recordUsage(body.capsuleId, body.taskType, {
+          success: !!body.success,
+          tokensUsed: body.tokensUsed || 0,
+          baselineTokens: body.baselineTokens || 0,
+          model: body.model || undefined,
+        });
+        sendJson(res, 200, {
+          recorded: true,
+          capsuleId: body.capsuleId,
+          taskType: body.taskType,
+          success: !!body.success,
+          fitness,
+          totalSamples: darwin.tracker.getSampleCount(body.capsuleId),
+        });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
     path: `${ROUTE_PREFIX}/`,
     auth: "plugin",
     match: "prefix",
@@ -994,6 +1191,36 @@ export default function register(api) {
         .action(async () => {
           const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           await run("peers", []);
+        });
+
+      darwin
+        .command("select <taskType>")
+        .description("Select the best capsule strategy for a task type")
+        .option("--count <n>", "Number of candidates to return", "1")
+        .action(async (taskType, opts) => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          const args = [taskType];
+          if (opts.count && opts.count !== "1") args.push("--count", opts.count);
+          await run("select", args);
+        });
+
+      darwin
+        .command("record <capsuleId> <taskType>")
+        .description("Record a capsule usage result")
+        .option("--success", "Task succeeded")
+        .option("--fail", "Task failed")
+        .option("--tokens-used <n>", "Tokens consumed")
+        .option("--baseline-tokens <n>", "Baseline tokens without capsule")
+        .option("--model <model>", "AI model used")
+        .action(async (capsuleId, taskType, opts) => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          const args = [capsuleId, taskType];
+          if (opts.success) args.push("--success");
+          if (opts.fail) args.push("--fail");
+          if (opts.tokensUsed) args.push("--tokens-used", opts.tokensUsed);
+          if (opts.baselineTokens) args.push("--baseline-tokens", opts.baselineTokens);
+          if (opts.model) args.push("--model", opts.model);
+          await run("record", args);
         });
 
       darwin
