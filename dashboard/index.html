@@ -213,6 +213,120 @@
     color: var(--dim);
     font-size: 10px;
   }
+  .survival-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .survival-badge.alive { background: rgba(0,255,136,0.15); color: var(--accent); }
+  .survival-badge.warned { background: rgba(255,107,53,0.15); color: var(--accent2); }
+  .survival-badge.dead { background: rgba(255,56,96,0.15); color: var(--danger); }
+  .survival-badge .badge-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  .survival-badge.alive .badge-dot { background: var(--accent); }
+  .survival-badge.warned .badge-dot { background: var(--accent2); }
+  .survival-badge.dead .badge-dot { background: var(--danger); }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .hb-countdown {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+  .hb-countdown .hb-countdown-fill {
+    height: 100%;
+    background: var(--accent3);
+    border-radius: 2px;
+    transition: width 1s linear;
+  }
+  .task-card {
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .task-card .task-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .task-card .task-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .task-card .bounty-amount {
+    font-weight: 700;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .task-card .bounty-amount.zero { color: var(--dim); }
+  .task-card .task-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 10px;
+    color: var(--dim);
+  }
+  .task-card .task-meta .expiring { color: var(--danger); }
+  .task-card .task-meta .beginner { color: var(--accent3); }
+  .signal-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .signal-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .signal-tag.hot {
+    background: rgba(255,107,53,0.15);
+    color: var(--accent2);
+    border: 1px solid rgba(255,107,53,0.3);
+  }
+  .signal-tag.explore {
+    background: rgba(78,205,196,0.12);
+    color: var(--accent3);
+    border: 1px solid rgba(78,205,196,0.3);
+  }
+  .explore-reason {
+    font-size: 9px;
+    color: var(--dim);
+    margin-left: 4px;
+    font-weight: 400;
+  }
+  .climate-section {
+    margin-bottom: 10px;
+  }
+  .climate-section-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--dim);
+    margin-bottom: 6px;
+  }
+  .panel.span-2 {
+    grid-column: span 2;
+  }
 </style>
 </head>
 <body>
@@ -226,7 +340,7 @@
   </div>
 
   <div class="grid">
-    <!-- Panel 1: Status -->
+    <!-- Row 1 -->
     <div class="panel">
       <h2>Node Status</h2>
       <div id="statusPanel">
@@ -242,44 +356,75 @@
       </div>
     </div>
 
-    <!-- Panel 2: Fitness Over Time -->
+    <div class="panel">
+      <h2>Hub Heartbeat</h2>
+      <div id="heartbeatPanel">
+        <div class="stat-row">
+          <span class="stat-label">Survival</span>
+          <span id="hbSurvival"><span class="survival-badge dead"><span class="badge-dot"></span>unknown</span></span>
+        </div>
+        <div class="stat-row"><span class="stat-label">Credits</span><span class="stat-value" id="hbCredits">—</span></div>
+        <div class="stat-row"><span class="stat-label">Node Status</span><span class="stat-value" id="hbNodeStatus">—</span></div>
+        <div class="stat-row"><span class="stat-label">Last Heartbeat</span><span class="stat-value" id="hbLastTime">—</span></div>
+        <div class="stat-row">
+          <span class="stat-label">Next Heartbeat</span>
+          <span class="stat-value" id="hbNextTime">—</span>
+        </div>
+        <div class="hb-countdown"><div class="hb-countdown-fill" id="hbCountdownBar" style="width:0%"></div></div>
+        <div class="stat-row" style="margin-top:4px"><span class="stat-label">Available Tasks</span><span class="stat-value" id="hbTaskCount">0</span></div>
+      </div>
+    </div>
+
+    <!-- Row 2 -->
     <div class="panel">
       <h2>Fitness Over Time</h2>
       <canvas id="fitnessChart"></canvas>
     </div>
 
-    <!-- Panel 3: Gene Rankings -->
+    <div class="panel">
+      <h2>Available Bounties</h2>
+      <div id="bountyList" style="max-height:280px; overflow-y:auto">
+        <div style="color:var(--dim)">No heartbeat data yet</div>
+      </div>
+    </div>
+
+    <!-- Row 3 -->
     <div class="panel">
       <h2>Top Genes</h2>
       <div id="geneRankings"></div>
     </div>
 
-    <!-- Panel 4: Model Performance Leaderboard -->
     <div class="panel">
       <h2>Model Performance</h2>
       <div id="modelLeaderboard"><div style="color:var(--dim)">No model data yet</div></div>
     </div>
 
-    <!-- Panel 5: Network / Peers -->
+    <!-- Row 4 -->
     <div class="panel">
       <h2>Peer Network</h2>
       <div id="peerNetwork"></div>
     </div>
 
-    <!-- Panel 6: Sponsor Grants -->
+    <div class="panel">
+      <h2>Topic Climate</h2>
+      <div id="topicClimate">
+        <div style="color:var(--dim)">No heartbeat data yet</div>
+      </div>
+    </div>
+
+    <!-- Row 5 -->
     <div class="panel">
       <h2>Sponsor Grants</h2>
       <div id="sponsorGrants"><div style="color:var(--dim)">No active grants</div></div>
     </div>
 
-    <!-- Panel 7: Token Comparison -->
     <div class="panel">
       <h2>Token Savings</h2>
       <canvas id="tokenChart"></canvas>
     </div>
 
-    <!-- Panel 8: Event Log -->
-    <div class="panel">
+    <!-- Row 6 -->
+    <div class="panel span-2">
       <h2>Evolution Log</h2>
       <div class="event-log" id="eventLog"></div>
     </div>
@@ -379,11 +524,12 @@ function connectWS() {
 
 async function pollAPI() {
   try {
-    const [status, genes, peers, leaderboard] = await Promise.all([
+    const [status, genes, peers, leaderboard, heartbeatState] = await Promise.all([
       fetch(`${API_BASE}/status`).then(r => r.json()),
       fetch(`${API_BASE}/genes`).then(r => r.json()),
       fetch(`${API_BASE}/peers`).then(r => r.json()),
       fetch(`${API_BASE}/leaderboard`).then(r => r.json()),
+      fetch(`${API_BASE}/heartbeat`).then(r => r.json()).catch(() => null),
     ]);
     document.getElementById('statusDot').classList.add('online');
     document.getElementById('statusText').textContent = 'Connected (REST)';
@@ -391,6 +537,8 @@ async function pollAPI() {
     updateGenes(genes);
     updatePeers(peers);
     updateLeaderboard(leaderboard);
+    const hb = status.heartbeat || heartbeatState?.lastHeartbeat;
+    if (hb) updateHeartbeat(hb);
   } catch {
     document.getElementById('statusDot').classList.remove('online');
     document.getElementById('statusText').textContent = 'Polling failed';
@@ -451,6 +599,8 @@ function updateStatus(s) {
   if (s.sponsor) {
     updateSponsor(s.sponsor);
   }
+
+  if (s.heartbeat) updateHeartbeat(s.heartbeat);
 }
 
 function updateGenes(genes) {
@@ -555,6 +705,144 @@ function addEvent(evt) {
   while (el.children.length > 100) el.lastChild.remove();
 }
 
+// ── Heartbeat ────────────────────────────────────────────────────────────
+
+let hbCountdownTimer = null;
+let hbLastReceivedAt = 0;
+let hbNextMs = 0;
+
+function timeAgo(isoString) {
+  if (!isoString) return '—';
+  const diff = Date.now() - new Date(isoString).getTime();
+  if (diff < 0) return 'just now';
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h ${min % 60}m ago`;
+}
+
+function updateHeartbeat(hb) {
+  const raw = hb.raw || {};
+
+  // Survival badge
+  const survival = hb.survivalStatus || raw.survival_status || 'unknown';
+  const badgeClass = survival === 'alive' ? 'alive' : survival === 'warned' ? 'warned' : 'dead';
+  document.getElementById('hbSurvival').innerHTML =
+    `<span class="survival-badge ${badgeClass}"><span class="badge-dot"></span>${survival}</span>`;
+
+  // Credits
+  const credits = hb.creditBalance ?? raw.credit_balance ?? '—';
+  const credEl = document.getElementById('hbCredits');
+  credEl.textContent = typeof credits === 'number' ? credits.toLocaleString() : credits;
+  credEl.className = 'stat-value' + (credits > 0 ? ' good' : '');
+
+  // Node status
+  const nodeStatus = raw.node_status || '—';
+  const nsEl = document.getElementById('hbNodeStatus');
+  nsEl.textContent = nodeStatus;
+  nsEl.className = 'stat-value' + (nodeStatus === 'active' ? ' good' : '');
+
+  // Last heartbeat time
+  const ts = hb.timestamp || raw.server_time;
+  document.getElementById('hbLastTime').textContent = timeAgo(ts);
+
+  // Next heartbeat countdown
+  hbNextMs = hb.nextHeartbeatMs || raw.next_heartbeat_ms || 300000;
+  hbLastReceivedAt = ts ? new Date(ts).getTime() : Date.now();
+  document.getElementById('hbNextTime').textContent = `${Math.round(hbNextMs / 1000)}s interval`;
+  startCountdown();
+
+  // Task count
+  const tasks = raw.available_tasks || hb.availableWork || [];
+  document.getElementById('hbTaskCount').textContent = tasks.length;
+
+  // Bounty list
+  updateBounties(tasks);
+
+  // Topic climate
+  const climate = raw.topic_climate;
+  if (climate) updateTopicClimate(climate);
+}
+
+function startCountdown() {
+  if (hbCountdownTimer) clearInterval(hbCountdownTimer);
+  const bar = document.getElementById('hbCountdownBar');
+  hbCountdownTimer = setInterval(() => {
+    const elapsed = Date.now() - hbLastReceivedAt;
+    const pct = Math.min(100, (elapsed / hbNextMs) * 100);
+    bar.style.width = `${100 - pct}%`;
+    if (pct >= 100) {
+      document.getElementById('hbLastTime').textContent = timeAgo(new Date(hbLastReceivedAt).toISOString());
+    }
+  }, 1000);
+}
+
+function updateBounties(tasks) {
+  const el = document.getElementById('bountyList');
+  if (!tasks || tasks.length === 0) {
+    el.innerHTML = '<div style="color:var(--dim)">No available tasks</div>';
+    return;
+  }
+
+  el.innerHTML = tasks.map(t => {
+    const bounty = parseFloat(t.bounty_amount || '0');
+    const bountyClass = bounty > 0 ? '' : ' zero';
+    const expires = t.expires_at ? new Date(t.expires_at) : null;
+    const now = new Date();
+    const daysLeft = expires ? Math.max(0, Math.ceil((expires - now) / 86400000)) : null;
+    const expiryClass = daysLeft !== null && daysLeft <= 2 ? ' expiring' : '';
+    const title = (t.title || '').length > 80 ? t.title.slice(0, 77) + '...' : (t.title || '—');
+
+    return `<div class="task-card">
+      <div class="task-header">
+        <span class="task-title" title="${(t.title || '').replace(/"/g, '&quot;')}">${title}</span>
+        <span class="bounty-amount${bountyClass}">${bounty > 0 ? `¤${bounty.toFixed(0)}` : 'Free'}</span>
+      </div>
+      <div class="task-meta">
+        <span>slots: ${t.slots_remaining ?? '?'}</span>
+        <span>subs: ${t.submission_count ?? 0}</span>
+        ${t.beginner_friendly ? '<span class="beginner">beginner-ok</span>' : ''}
+        ${daysLeft !== null ? `<span class="${expiryClass}">${daysLeft}d left</span>` : ''}
+        ${t.min_reputation > 0 ? `<span>rep≥${t.min_reputation}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function updateTopicClimate(climate) {
+  const el = document.getElementById('topicClimate');
+  let html = '';
+
+  if (climate.hot_signals && climate.hot_signals.length > 0) {
+    html += `<div class="climate-section">
+      <div class="climate-section-title">Hot Signals</div>
+      <div class="signal-tags">${climate.hot_signals.map(s =>
+        `<span class="signal-tag hot">${s}</span>`
+      ).join('')}</div>
+    </div>`;
+  }
+
+  if (climate.recommended_explore && climate.recommended_explore.length > 0) {
+    html += `<div class="climate-section">
+      <div class="climate-section-title">Recommended Explore</div>
+      <div class="signal-tags">${climate.recommended_explore.map(r => {
+        const sig = typeof r === 'string' ? r : r.signal;
+        const reason = typeof r === 'object' ? r.reason : '';
+        const truncSig = sig.length > 40 ? sig.slice(0, 37) + '...' : sig;
+        return `<span class="signal-tag explore" title="${sig.replace(/"/g, '&quot;')}">${truncSig}${reason ? `<span class="explore-reason">${reason}</span>` : ''}</span>`;
+      }).join('')}</div>
+    </div>`;
+  }
+
+  if (climate.hint) {
+    html += `<div style="margin-top:8px; font-size:10px; color:var(--dim); font-style:italic">${climate.hint}</div>`;
+  }
+
+  el.innerHTML = html || '<div style="color:var(--dim)">No climate data</div>';
+}
+
 if (!IS_PLUGIN_MODE) {
   setTimeout(() => {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -568,6 +856,27 @@ if (!IS_PLUGIN_MODE) {
         peerCount: 0,
         leaderboard: [],
         sponsor: null,
+        heartbeat: {
+          timestamp: new Date().toISOString(),
+          status: 'ok',
+          survivalStatus: 'alive',
+          creditBalance: 0,
+          nextHeartbeatMs: 300000,
+          availableWork: [],
+          pendingEvents: [],
+          raw: {
+            node_status: 'active',
+            survival_status: 'alive',
+            credit_balance: 0,
+            next_heartbeat_ms: 300000,
+            available_tasks: [],
+            topic_climate: {
+              hot_signals: ['demo_signal_a', 'demo_signal_b'],
+              recommended_explore: [{ signal: 'demo_topic', reason: 'unmet_demand' }],
+              hint: 'This is demo data. Connect to Hub for real signals.',
+            },
+          },
+        },
       });
     }
   }, 2000);

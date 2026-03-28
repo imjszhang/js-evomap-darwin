@@ -35,6 +35,7 @@ export class Darwin {
   #evolveTimer;
   #running = false;
   #eventHandlers = new Map();
+  #lastHeartbeatResult = null;
 
   constructor({
     hubUrl,
@@ -75,6 +76,15 @@ export class Darwin {
   get running() { return this.#running; }
   get peers() { return this.#peerExchange; }
   get sponsor() { return this.#sponsor; }
+  get lastHeartbeat() { return this.#lastHeartbeatResult; }
+
+  /**
+   * Allow external callers (e.g. plugin heartbeat service) to cache a
+   * heartbeat result so that getStatus() can expose it.
+   */
+  setLastHeartbeat(res) {
+    this.#lastHeartbeatResult = res;
+  }
 
   /**
    * Attach optional modules (mutator, peer-exchange, sponsor) after construction.
@@ -212,6 +222,7 @@ export class Darwin {
    * Get comprehensive status for CLI / dashboard.
    */
   getStatus() {
+    const hb = this.#lastHeartbeatResult;
     return {
       running: this.#running,
       nodeId: this.#hub.nodeId,
@@ -224,6 +235,16 @@ export class Darwin {
       hasSponsor: !!this.#sponsor,
       sponsor: this.#sponsor?.getStats() ?? null,
       leaderboard: this.#tracker.rankByModel?.() ?? [],
+      heartbeat: hb ? {
+        timestamp: hb.timestamp || new Date().toISOString(),
+        status: hb.status,
+        survivalStatus: hb.survivalStatus,
+        creditBalance: hb.creditBalance,
+        availableWork: hb.availableWork,
+        nextHeartbeatMs: hb.nextHeartbeatMs,
+        pendingEvents: hb.pendingEvents,
+        raw: hb.raw,
+      } : null,
     };
   }
 
@@ -232,6 +253,7 @@ export class Darwin {
   async #doHeartbeat() {
     try {
       const res = await this.#hub.heartbeat();
+      this.#lastHeartbeatResult = res;
       this.#emit("heartbeat", res);
       return res;
     } catch (err) {

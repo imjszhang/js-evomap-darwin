@@ -1,7 +1,7 @@
 import nodePath from "node:path";
 import nodeFs from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = nodePath.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = nodePath.resolve(__dirname, "..");
@@ -102,9 +102,9 @@ let darwinInstance = null;
 async function getDarwin(pluginCfg) {
   if (darwinInstance) return darwinInstance;
 
-  const { Darwin } = await import(nodePath.join(PROJECT_ROOT, "src", "index.js"));
-  const { Mutator } = await import(nodePath.join(PROJECT_ROOT, "src", "mutator.js"));
-  const { PeerExchange } = await import(nodePath.join(PROJECT_ROOT, "src", "peer-exchange.js"));
+  const { Darwin } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "index.js")).href);
+  const { Mutator } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "mutator.js")).href);
+  const { PeerExchange } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "peer-exchange.js")).href);
 
   const dataDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
 
@@ -274,7 +274,7 @@ export default function register(api) {
         const darwin = await getDarwin(pluginCfg);
         if (!darwin.hub.nodeId) await darwin.init();
 
-        const { getAllMetaGenes } = await import(nodePath.join(PROJECT_ROOT, "src", "meta-genes.js"));
+        const { getAllMetaGenes } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "meta-genes.js")).href);
         const metaGenes = getAllMetaGenes();
         const results = [];
 
@@ -343,7 +343,7 @@ export default function register(api) {
     async execute(_toolCallId, params) {
       try {
         const darwin = await getDarwin(pluginCfg);
-        const { Sponsor } = await import(nodePath.join(PROJECT_ROOT, "src", "sponsor.js"));
+        const { Sponsor } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "sponsor.js")).href);
         const sponsor = darwin.sponsor || new Sponsor({ dataDir: pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data") });
 
         if (params.addGrant && params.sponsorId) {
@@ -407,6 +407,7 @@ export default function register(api) {
     async handler(_req, res) {
       res.writeHead(301, { Location: `${ROUTE_PREFIX}/` });
       res.end();
+      return true;
     },
   });
 
@@ -415,6 +416,7 @@ export default function register(api) {
     auth: "plugin",
     async handler(_req, res) {
       serveStaticFile(res, nodePath.join(DASHBOARD_DIR, "index.html"));
+      return true;
     },
   });
 
@@ -428,6 +430,7 @@ export default function register(api) {
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
+      return true;
     },
   });
 
@@ -447,6 +450,7 @@ export default function register(api) {
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
+      return true;
     },
   });
 
@@ -468,6 +472,7 @@ export default function register(api) {
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
+      return true;
     },
   });
 
@@ -482,6 +487,7 @@ export default function register(api) {
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
+      return true;
     },
   });
 
@@ -498,6 +504,7 @@ export default function register(api) {
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
+      return true;
     },
   });
 
@@ -512,6 +519,7 @@ export default function register(api) {
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
+      return true;
     },
   });
 
@@ -524,20 +532,21 @@ export default function register(api) {
       if (subPath.startsWith("api/")) {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("Not Found");
-        return;
+        return true;
       }
       const filePath = nodePath.normalize(nodePath.join(DASHBOARD_DIR, subPath));
       if (!filePath.startsWith(DASHBOARD_DIR)) {
         res.writeHead(403, { "Content-Type": "text/plain" });
         res.end("Forbidden");
-        return;
+        return true;
       }
       if (!nodeFs.existsSync(filePath)) {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("Not Found");
-        return;
+        return true;
       }
       serveStaticFile(res, filePath);
+      return true;
     },
   });
 
@@ -546,48 +555,55 @@ export default function register(api) {
   if (pluginCfg.heartbeatEnabled !== false) {
     const heartbeatDataDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
 
+    let _heartbeatTimerId = null;
+    let _heartbeatStopped = false;
+
     api.registerService({
       id: "darwin-heartbeat",
       label: "Darwin Heartbeat",
-      async start({ signal }) {
+      async start(ctx) {
+        _heartbeatStopped = false;
         const baseIntervalMs = pluginCfg.heartbeatIntervalMs || 300_000;
         let nextIntervalMs = baseIntervalMs;
-        let timerId = null;
 
         const runHeartbeat = async () => {
           try {
             const darwin = await getDarwin(pluginCfg);
             if (!darwin.hub.nodeId) {
-              api.logger.warn("Heartbeat skipped: node not registered yet. Run darwin_evolve first.");
+              ctx.logger.warn("Heartbeat skipped: node not registered yet. Run darwin_evolve first.");
               return;
             }
             const result = await darwin.hub.heartbeat();
+            darwin.setLastHeartbeat(result);
             await saveHeartbeatState(heartbeatDataDir, result, darwin.hub.nodeId);
             if (result.nextHeartbeatMs && result.nextHeartbeatMs > 0) {
               nextIntervalMs = result.nextHeartbeatMs;
             }
-            api.logger.debug(
+            ctx.logger.debug(
               `Heartbeat OK | credits: ${result.creditBalance} | next: ${nextIntervalMs}ms`,
             );
           } catch (err) {
-            api.logger.error(`Heartbeat failed: ${err.message}`);
+            ctx.logger.error(`Heartbeat failed: ${err.message}`);
           }
         };
 
         const scheduleNext = () => {
-          if (signal.aborted) return;
-          timerId = setTimeout(async () => {
+          if (_heartbeatStopped) return;
+          _heartbeatTimerId = setTimeout(async () => {
             await runHeartbeat();
             scheduleNext();
           }, nextIntervalMs);
         };
 
-        signal.addEventListener("abort", () => {
-          if (timerId) clearTimeout(timerId);
-        });
-
         await runHeartbeat();
         scheduleNext();
+      },
+      stop() {
+        _heartbeatStopped = true;
+        if (_heartbeatTimerId) {
+          clearTimeout(_heartbeatTimerId);
+          _heartbeatTimerId = null;
+        }
       },
     });
   }
@@ -604,7 +620,7 @@ export default function register(api) {
         .command("init")
         .description("Register with EvoMap Hub")
         .action(async () => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           await run("init", []);
         });
 
@@ -612,7 +628,7 @@ export default function register(api) {
         .command("status")
         .description("Show node status, gene pool, fitness stats")
         .action(async () => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           await run("status", []);
         });
 
@@ -620,7 +636,7 @@ export default function register(api) {
         .command("start")
         .description("Start the evolution loop")
         .action(async () => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           await run("start", []);
         });
 
@@ -629,7 +645,7 @@ export default function register(api) {
         .description("View fitness rankings")
         .option("--task-type <type>", "Filter by task type")
         .action(async (opts) => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           const args = [];
           if (opts.taskType) args.push("--task-type", opts.taskType);
           await run("fitness", args);
@@ -640,7 +656,7 @@ export default function register(api) {
         .description("View local gene pool")
         .option("--top <n>", "Number of top genes to show")
         .action(async (opts) => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           const args = [];
           if (opts.top) args.push("--top", opts.top);
           await run("genes", args);
@@ -650,7 +666,7 @@ export default function register(api) {
         .command("peers")
         .description("View peer network")
         .action(async () => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           await run("peers", []);
         });
 
@@ -659,7 +675,7 @@ export default function register(api) {
         .description("View model performance rankings")
         .option("--task-type <type>", "Filter by task type")
         .action(async (opts) => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           const args = [];
           if (opts.taskType) args.push("--task-type", opts.taskType);
           await run("leaderboard", args);
@@ -673,7 +689,7 @@ export default function register(api) {
         .option("--model <model>", "Model name")
         .option("--budget <n>", "Token budget")
         .action(async (opts) => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           const args = [];
           if (opts.add) args.push("--add");
           if (opts.sponsor) args.push("--sponsor", opts.sponsor);
@@ -687,7 +703,7 @@ export default function register(api) {
         .description("Publish meta-genes to Hub")
         .option("--dry-run", "Validate only")
         .action(async (opts) => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           const args = opts.dryRun ? ["--dry-run"] : [];
           await run("publish-meta", args);
         });
@@ -697,7 +713,7 @@ export default function register(api) {
         .description("Launch real-time dashboard")
         .option("--port <port>", "Server port", "3777")
         .action(async (opts) => {
-          const { run } = await import(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js"));
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           await run("dashboard", ["--port", opts.port]);
         });
     },
