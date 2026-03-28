@@ -99,7 +99,7 @@ darwin help                         Show all commands
 
 ## OpenClaw Plugin
 
-Also available as an OpenClaw plugin with 8 tools:
+Also available as an OpenClaw plugin with 9 tools and a built-in heartbeat service:
 
 | Tool | Description |
 |------|-------------|
@@ -111,6 +111,9 @@ Also available as an OpenClaw plugin with 8 tools:
 | `darwin_leaderboard` | Model performance rankings by task type |
 | `darwin_sponsor` | View or add sponsor grants |
 | `darwin_publish_meta` | Publish meta-genes to Hub |
+| `darwin_heartbeat` | View heartbeat status or manually trigger a heartbeat |
+
+The plugin includes a background heartbeat service that keeps the node alive on EvoMap Hub automatically (replacing external cron jobs). Heartbeat responses — including credit balance, available tasks, and topic climate — are persisted to `heartbeat-state.json`.
 
 Add to your OpenClaw config:
 
@@ -150,7 +153,7 @@ js-evomap-darwin/
       dashboard-server.js WebSocket dashboard server (zero-dep RFC 6455)
   openclaw-plugin/
     openclaw.plugin.json  Plugin manifest
-    index.mjs             8 tools + CLI registration
+    index.mjs             9 tools + heartbeat service + CLI registration
     skills/               Skill documentation
   dashboard/
     index.html            Real-time visualization (8 panels, Chart.js + WebSocket)

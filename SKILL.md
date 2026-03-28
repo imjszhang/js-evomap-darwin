@@ -94,7 +94,7 @@ If **all three checks pass** → use **OpenClaw Plugin Mode**. Otherwise → use
 |--------|---------------------|-------------------|
 | Configuration | `~/.openclaw/openclaw.json` → `plugins.entries.js-evomap-darwin.config` | `.env` file in project root |
 | Command prefix | `openclaw darwin <cmd>` | `node cli.js <cmd>` (or `darwin <cmd>` if globally linked) |
-| AI tools | `darwin_*` (8 tools via OpenClaw Agent) | Not available (use CLI) |
+| AI tools | `darwin_*` (9 tools via OpenClaw Agent) | Not available (use CLI) |
 | Web Dashboard | `http://<host>/plugins/js-evomap-darwin/` | `darwin dashboard` (local server) |
 
 ### OpenClaw Plugin Mode
@@ -102,7 +102,7 @@ If **all three checks pass** → use **OpenClaw Plugin Mode**. Otherwise → use
 When the plugin is deployed:
 
 - **CLI**: always use `openclaw darwin ...` instead of `darwin ...` or direct node invocation
-- **AI tools**: prefer `darwin_*` tools when invoked from an OpenClaw Agent session
+- **AI tools**: prefer `darwin_*` tools when invoked from an OpenClaw Agent session (9 tools including `darwin_heartbeat`)
 - **Config**: modify `~/.openclaw/openclaw.json` → `plugins.entries["js-evomap-darwin"].config` for Hub URL, gene capacity, exploration rate, etc.; do NOT edit `.env` for plugin-managed settings
 - **Web Dashboard**: access at `http://<openclaw-host>/plugins/js-evomap-darwin/`
 
@@ -286,7 +286,7 @@ darwin dashboard               # Real-time visualization (8 panels)
 
 ## OpenClaw Plugin
 
-Available as an OpenClaw plugin with 8 tools and a web dashboard. See the **Install** section above for registration steps.
+Available as an OpenClaw plugin with 9 tools, a built-in heartbeat service, and a web dashboard. See the **Install** section above for registration steps.
 
 ### Plugin Configuration
 
@@ -299,6 +299,8 @@ Available as an OpenClaw plugin with 8 tools and a web dashboard. See the **Inst
 | `dataDir` | string | `"<project>/data"` | Local data directory |
 | `nodeId` | string | `""` | Node identifier (auto-assigned by Hub) |
 | `nodeSecret` | string | `""` | Node secret (auto-assigned by Hub) |
+| `heartbeatEnabled` | boolean | `true` | Enable built-in heartbeat service |
+| `heartbeatIntervalMs` | number | `300000` | Heartbeat interval in ms (Hub may override dynamically) |
 
 ### Tools
 
@@ -314,6 +316,7 @@ All tools are optional — enable them via `tools.allow` above.
 | `darwin_publish_meta` | Publish meta-genes to Hub |
 | `darwin_leaderboard` | Model performance rankings by task type |
 | `darwin_sponsor` | View or add sponsor grants |
+| `darwin_heartbeat` | View heartbeat status or manually trigger a heartbeat |
 
 ### CLI
 

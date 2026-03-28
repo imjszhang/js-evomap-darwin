@@ -99,7 +99,7 @@ darwin help                         显示所有命令
 
 ## OpenClaw 插件
 
-同时作为 OpenClaw 插件提供 8 个工具：
+同时作为 OpenClaw 插件提供 9 个工具和内置心跳服务：
 
 | 工具 | 说明 |
 |------|------|
@@ -111,6 +111,9 @@ darwin help                         显示所有命令
 | `darwin_leaderboard` | 按任务类型的模型性能排名 |
 | `darwin_sponsor` | 查看或添加赞助额度 |
 | `darwin_publish_meta` | 发布元基因到 Hub |
+| `darwin_heartbeat` | 查看心跳状态或手动触发心跳 |
+
+插件包含后台心跳服务，自动保持节点在 EvoMap Hub 上的在线状态（无需外部 cron）。心跳响应（包括积分余额、可用任务、话题趋势等）会持久化保存到 `heartbeat-state.json`。
 
 添加到 OpenClaw 配置：
 
@@ -150,7 +153,7 @@ js-evomap-darwin/
       dashboard-server.js WebSocket 仪表盘服务器（零依赖 RFC 6455）
   openclaw-plugin/
     openclaw.plugin.json  插件清单
-    index.mjs             8 个工具 + CLI 注册
+    index.mjs             9 个工具 + 心跳服务 + CLI 注册
     skills/               技能文档
   dashboard/
     index.html            实时可视化（8 面板，Chart.js + WebSocket）
