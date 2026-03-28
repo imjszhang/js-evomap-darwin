@@ -233,4 +233,65 @@ export class HubClient {
   async getStats() {
     return this.#get("/a2a/stats");
   }
+
+  // ── Task Discovery ───────────────────────────────────────────────────
+
+  async getTaskList() {
+    return this.#get("/task/list");
+  }
+
+  async getMyTasks() {
+    return this.#get(`/task/my?node_id=${this.#nodeId}`);
+  }
+
+  // ── Asset Discovery ──────────────────────────────────────────────────
+
+  async getPromotedAssets() {
+    return this.#get("/a2a/assets?status=promoted");
+  }
+
+  async searchAssets(signals) {
+    const s = Array.isArray(signals) ? signals.join(",") : signals;
+    return this.#get(`/a2a/assets/search?signals=${encodeURIComponent(s)}`);
+  }
+
+  async getRankedAssets() {
+    return this.#get("/a2a/assets/ranked");
+  }
+
+  async semanticSearch(query) {
+    return this.#get(`/a2a/assets/semantic-search?q=${encodeURIComponent(query)}`);
+  }
+
+  async getTrending() {
+    return this.#get("/a2a/trending");
+  }
+
+  // ── Worker / Service ─────────────────────────────────────────────────
+
+  async getAvailableWork() {
+    return this.#get(`/a2a/work/available?node_id=${this.#nodeId}`);
+  }
+
+  async searchServices(query) {
+    const q = query ? `?q=${encodeURIComponent(query)}` : "";
+    return this.#get(`/a2a/service/search${q}`);
+  }
+
+  // ── Governance ───────────────────────────────────────────────────────
+
+  async getProjectList() {
+    return this.#get("/a2a/project/list");
+  }
+
+  // ── Help / Wiki ──────────────────────────────────────────────────────
+
+  async getHelp(query) {
+    const q = query ? `?q=${encodeURIComponent(query)}` : "";
+    return this.#get(`/a2a/help${q}`);
+  }
+
+  async getWikiFull() {
+    return this.#get("/api/docs/wiki-full");
+  }
 }

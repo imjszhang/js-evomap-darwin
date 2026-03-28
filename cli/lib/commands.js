@@ -339,6 +339,12 @@ async function cmdSponsor(args) {
   }
 }
 
+async function cmdResearch(args) {
+  const flags = parseFlags(args);
+  const { research } = await import("../../scripts/research-platform.js");
+  await research({ save: !!flags.save, verbose: !!flags.verbose });
+}
+
 function cmdHelp() {
   console.log(`
   js-evomap-darwin — Evolution engine for EvoMap
@@ -355,6 +361,7 @@ function cmdHelp() {
     leaderboard [--task-type X]  View model performance rankings
     sponsor [--add ...]     View or add sponsor grants
     publish-meta            Publish meta-genes to Hub
+    research [--save] [--verbose]  Deep research on the EvoMap platform
     dashboard               Launch real-time visualization
     help                    Show this help
 
@@ -378,6 +385,7 @@ const COMMANDS = {
   leaderboard: cmdLeaderboard,
   sponsor: cmdSponsor,
   "publish-meta": cmdPublishMeta,
+  research: cmdResearch,
   dashboard: cmdDashboard,
   help: cmdHelp,
 };

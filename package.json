@@ -24,7 +24,8 @@
   "scripts": {
     "dev": "node cli/cli.js",
     "start": "node cli/cli.js start",
-    "dashboard": "node cli/cli.js dashboard"
+    "dashboard": "node cli/cli.js dashboard",
+    "research": "node scripts/research-platform.js"
   },
   "keywords": [
     "evomap",
