@@ -118,6 +118,7 @@ async function getDarwin(pluginCfg) {
   const { Darwin } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "index.js")).href);
   const { Mutator } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "mutator.js")).href);
   const { PeerExchange } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "peer-exchange.js")).href);
+  const { TaskMatcher } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "task-matcher.js")).href);
 
   const dataDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
 
@@ -132,6 +133,7 @@ async function getDarwin(pluginCfg) {
 
   darwinInstance.use(new Mutator({ mutationRate: pluginCfg.mutationRate || 0.05 }));
   darwinInstance.use(new PeerExchange({ hub: darwinInstance.hub, dataDir }));
+  darwinInstance.use(new TaskMatcher({ hub: darwinInstance.hub, dataDir }));
 
   darwinInstance.on("fetch", (data) => {
     pushEvent("fetch", `Fetched ${data.total} assets, ingested ${data.ingested}`);
@@ -147,6 +149,15 @@ async function getDarwin(pluginCfg) {
   });
   darwinInstance.on("grant-consumed", (data) => {
     pushEvent("sponsor", `Grant ${data.grantId.slice(0, 16)}... consumed ${data.amount} tokens (${data.phase})`);
+  });
+  darwinInstance.on("task-matched", (data) => {
+    pushEvent("task-matched", `Matched ${data.count} task(s), top: ${data.top?.task?.title || "?"} (score ${data.top?.matchScore})`);
+  });
+  darwinInstance.on("task-completed", (data) => {
+    pushEvent("task-completed", `Completed task "${data.title}" → asset ${data.assetId?.slice(0, 16)}...`);
+  });
+  darwinInstance.on("task-failed", (data) => {
+    pushEvent("task-failed", `Task ${data.taskId} failed: ${data.error}`);
   });
 
   return darwinInstance;
@@ -428,6 +439,70 @@ export default function register(api) {
     },
   }, { optional: true });
 
+  api.registerTool({
+    name: "darwin_worker",
+    label: "Darwin: Worker Pool",
+    description:
+      "View and control Worker Pool status — enable/disable worker, set domains, " +
+      "scan for matching tasks, or manually claim a specific task.",
+    parameters: {
+      type: "object",
+      properties: {
+        enable: { type: "boolean", description: "Enable the worker (register with Hub)" },
+        disable: { type: "boolean", description: "Disable the worker" },
+        scan: { type: "boolean", description: "Scan available tasks for matches" },
+        claim: { type: "string", description: "Claim and complete a specific task by ID" },
+        domains: { type: "string", description: "Comma-separated domain list to set" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const worker = darwin.worker;
+        if (!worker) return textResult("TaskMatcher not attached.");
+
+        if (params.enable) {
+          const domains = params.domains ? params.domains.split(",").map((d) => d.trim()) : undefined;
+          await worker.register({ enabled: true, domains });
+          return jsonResult({ enabled: true, domains });
+        }
+        if (params.disable) {
+          await worker.disable();
+          return jsonResult({ enabled: false });
+        }
+        if (params.domains && !params.enable) {
+          const domains = params.domains.split(",").map((d) => d.trim());
+          await worker.register({ enabled: worker.enabled, domains });
+          return jsonResult({ domains });
+        }
+        if (params.scan) {
+          const hb = darwin.lastHeartbeat;
+          const tasks = hb?.raw?.available_tasks || [];
+          const candidates = worker.scan(tasks, darwin.store);
+          return jsonResult({ tasksAvailable: tasks.length, matches: candidates.length, candidates: candidates.slice(0, 10).map((c) => ({
+            taskId: c.task.task_id,
+            title: c.task.title,
+            matchScore: c.matchScore,
+            matchedSignals: c.matchedSignals,
+          })) });
+        }
+        if (params.claim) {
+          const hb = darwin.lastHeartbeat;
+          const tasks = hb?.raw?.available_tasks || [];
+          const task = tasks.find((t) => t.task_id === params.claim);
+          if (!task) return textResult(`Task ${params.claim} not found in available tasks.`);
+          const match = worker.matchTask(task, darwin.store);
+          if (!match) return textResult("No matching gene for this task.");
+          const result = await worker.claimAndComplete(match, darwin);
+          return jsonResult(result);
+        }
+        return jsonResult(worker.getStats());
+      } catch (err) {
+        return textResult(`Worker operation failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
   // ── Gateway HTTP Routes: Dashboard + REST API ───────────────────────
 
   api.registerHttpRoute({
@@ -574,6 +649,39 @@ export default function register(api) {
       const since = parseInt(parsed.searchParams.get("since") || "0", 10);
       const events = eventBuffer.filter((e) => e.id > since);
       sendJson(res, 200, events);
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/worker`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        sendJson(res, 200, darwin.worker?.getStats() ?? { registered: false, workerEnabled: false });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/tasks`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const stats = darwin.worker?.getStats();
+        sendJson(res, 200, {
+          activeTasks: stats?.activeTasks ?? [],
+          completedHistory: stats?.completedHistory ?? [],
+          lastScanResults: stats?.lastScanResults ?? [],
+        });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
       return true;
     },
   });
@@ -753,6 +861,25 @@ export default function register(api) {
           if (opts.model) args.push("--model", opts.model);
           if (opts.budget) args.push("--budget", opts.budget);
           await run("sponsor", args);
+        });
+
+      darwin
+        .command("worker")
+        .description("View/control Worker Pool status")
+        .option("--enable", "Register and enable worker")
+        .option("--disable", "Disable worker")
+        .option("--scan", "Scan available tasks for matches")
+        .option("--claim <taskId>", "Claim and complete a specific task")
+        .option("--domains <list>", "Set worker domains (comma-separated)")
+        .action(async (opts) => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          const args = [];
+          if (opts.enable) args.push("--enable");
+          if (opts.disable) args.push("--disable");
+          if (opts.scan) args.push("--scan");
+          if (opts.claim) args.push("--claim", opts.claim);
+          if (opts.domains) args.push("--domains", opts.domains);
+          await run("worker", args);
         });
 
       darwin

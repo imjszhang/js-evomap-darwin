@@ -11,6 +11,7 @@ export { FitnessTracker } from "./fitness-tracker.js";
 export { CapsuleSelector } from "./capsule-selector.js";
 export { Sponsor } from "./sponsor.js";
 export { Leaderboard } from "./leaderboard.js";
+export { TaskMatcher } from "./task-matcher.js";
 
 const DEFAULT_HEARTBEAT_MS = 900_000; // 15 min
 const DEFAULT_EVOLVE_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -28,6 +29,7 @@ export class Darwin {
   #mutator;
   #peerExchange;
   #sponsor;
+  #taskMatcher;
   #dataDir;
   #credentialsPath;
 
@@ -67,6 +69,7 @@ export class Darwin {
     this.#mutator = null;
     this.#peerExchange = null;
     this.#sponsor = null;
+    this.#taskMatcher = null;
   }
 
   get hub() { return this.#hub; }
@@ -76,6 +79,7 @@ export class Darwin {
   get running() { return this.#running; }
   get peers() { return this.#peerExchange; }
   get sponsor() { return this.#sponsor; }
+  get worker() { return this.#taskMatcher; }
   get lastHeartbeat() { return this.#lastHeartbeatResult; }
 
   /**
@@ -97,6 +101,8 @@ export class Darwin {
       this.#peerExchange = module;
     } else if (name === "Sponsor") {
       this.#sponsor = module;
+    } else if (name === "TaskMatcher") {
+      this.#taskMatcher = module;
     }
     return this;
   }
@@ -115,6 +121,9 @@ export class Darwin {
       try { h(data); } catch { /* swallow handler errors */ }
     }
   }
+
+  /** Public emit bridge for use() modules (TaskMatcher, etc.) */
+  _emit(event, data) { this.#emit(event, data); }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -237,6 +246,7 @@ export class Darwin {
       peerCount: this.#peerExchange?.peerCount ?? 0,
       hasSponsor: !!this.#sponsor,
       sponsor: this.#sponsor?.getStats() ?? null,
+      worker: this.#taskMatcher?.getStats() ?? null,
       leaderboard: this.#tracker.rankByModel?.() ?? [],
       heartbeat: hb ? {
         timestamp: hb.timestamp || new Date().toISOString(),
@@ -289,6 +299,11 @@ export class Darwin {
       // 3. Peer exchange (if attached)
       if (this.#peerExchange && typeof this.#peerExchange.cycle === "function") {
         await this.#peerExchange.cycle(this);
+      }
+
+      // 4. Task matching (if attached)
+      if (this.#taskMatcher && typeof this.#taskMatcher.cycle === "function") {
+        await this.#taskMatcher.cycle(this);
       }
 
       this.#emit("evolve", { timestamp: new Date().toISOString() });

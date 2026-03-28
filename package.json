@@ -16,7 +16,8 @@
     "./peer-exchange": "./src/peer-exchange.js",
     "./meta-genes": "./src/meta-genes.js",
     "./sponsor": "./src/sponsor.js",
-    "./leaderboard": "./src/leaderboard.js"
+    "./leaderboard": "./src/leaderboard.js",
+    "./task-matcher": "./src/task-matcher.js"
   },
   "bin": {
     "darwin": "./cli/cli.js"

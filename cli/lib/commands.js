@@ -1,10 +1,11 @@
 import { Darwin } from "../../src/index.js";
 import { Mutator } from "../../src/mutator.js";
 import { PeerExchange } from "../../src/peer-exchange.js";
+import { TaskMatcher } from "../../src/task-matcher.js";
 
 const DATA_DIR = process.env.DARWIN_DATA_DIR || "./data";
 
-function createDarwin() {
+function createDarwin({ withWorker = false } = {}) {
   const darwin = new Darwin({
     hubUrl: process.env.HUB_URL,
     dataDir: DATA_DIR,
@@ -13,6 +14,9 @@ function createDarwin() {
   });
   darwin.use(new Mutator());
   darwin.use(new PeerExchange({ hub: darwin.hub, dataDir: DATA_DIR }));
+  if (withWorker) {
+    darwin.use(new TaskMatcher({ hub: darwin.hub, dataDir: DATA_DIR }));
+  }
   return darwin;
 }
 
@@ -339,6 +343,135 @@ async function cmdSponsor(args) {
   }
 }
 
+async function cmdWorker(args) {
+  const flags = parseFlags(args);
+  const darwin = createDarwin({ withWorker: true });
+
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    process.exit(1);
+  }
+
+  const worker = darwin.worker;
+
+  if (flags.enable) {
+    const domains = flags.domains ? flags.domains.split(",") : undefined;
+    console.log("\n  Registering as worker...\n");
+    try {
+      await worker.register({ enabled: true, domains });
+      console.log("  Worker enabled.");
+      if (domains) console.log(`  Domains: ${domains.join(", ")}`);
+    } catch (err) {
+      console.error(`  Failed: ${err.message}`);
+    }
+    console.log("");
+    return;
+  }
+
+  if (flags.disable) {
+    console.log("\n  Disabling worker...\n");
+    try {
+      await worker.disable();
+      console.log("  Worker disabled.\n");
+    } catch (err) {
+      console.error(`  Failed: ${err.message}\n`);
+    }
+    return;
+  }
+
+  if (flags.domains) {
+    const domains = flags.domains.split(",").map((d) => d.trim());
+    try {
+      await worker.register({ enabled: worker.enabled, domains });
+      console.log(`\n  Domains updated: ${domains.join(", ")}\n`);
+    } catch (err) {
+      console.error(`\n  Failed: ${err.message}\n`);
+    }
+    return;
+  }
+
+  if (flags.scan) {
+    console.log("\n  Scanning available tasks...\n");
+    try {
+      const hb = await darwin.hub.heartbeat();
+      darwin.setLastHeartbeat(hb);
+      const tasks = hb?.raw?.available_tasks || [];
+      if (tasks.length === 0) {
+        console.log("  No tasks available right now.\n");
+        return;
+      }
+      const candidates = worker.scan(tasks, darwin.store);
+      console.log(`  Found ${tasks.length} tasks, ${candidates.length} match(es):\n`);
+      for (const c of candidates) {
+        console.log(`  ${c.matchScore.toFixed(3).padStart(6)}  ${c.task.task_id?.slice(0, 16) || "?"}  ${c.task.title || "(untitled)"}`);
+        console.log(`         signals: ${c.matchedSignals.join(", ")} (${c.matchedSignals.length}/${c.totalSignals})`);
+      }
+    } catch (err) {
+      console.error(`  Scan failed: ${err.message}`);
+    }
+    console.log("");
+    return;
+  }
+
+  if (flags.claim) {
+    const taskId = flags.claim;
+    console.log(`\n  Claiming task ${taskId}...\n`);
+    try {
+      const hb = await darwin.hub.heartbeat();
+      darwin.setLastHeartbeat(hb);
+      const tasks = hb?.raw?.available_tasks || [];
+      const task = tasks.find((t) => t.task_id === taskId);
+      if (!task) {
+        console.error("  Task not found in available list.\n");
+        return;
+      }
+      const match = worker.matchTask(task, darwin.store);
+      if (!match) {
+        console.error("  No matching gene for this task.\n");
+        return;
+      }
+      const result = await worker.claimAndComplete(match, darwin);
+      console.log(`  Claimed & completed: assignment ${result.assignmentId}`);
+      console.log(`  Submitted asset: ${result.assetId?.slice(0, 24)}...\n`);
+    } catch (err) {
+      console.error(`  Claim failed: ${err.message}\n`);
+    }
+    return;
+  }
+
+  // Default: show worker status
+  const stats = worker.getStats();
+  console.log("\n  ── Worker Status ──\n");
+  console.log(`  Registered:  ${stats.registered}`);
+  console.log(`  Enabled:     ${stats.workerEnabled}`);
+  console.log(`  Auto Submit: ${stats.autoSubmit}`);
+  console.log(`  Domains:     ${stats.domains.length > 0 ? stats.domains.join(", ") : "(any)"}`);
+  console.log("");
+  console.log("  ── Counters ──");
+  console.log(`  Scanned:     ${stats.counters.scanned}`);
+  console.log(`  Matched:     ${stats.counters.matched}`);
+  console.log(`  Claimed:     ${stats.counters.claimed}`);
+  console.log(`  Completed:   ${stats.counters.completed}`);
+  console.log(`  Failed:      ${stats.counters.failed}`);
+  console.log("");
+
+  if (stats.activeTasks.length > 0) {
+    console.log("  ── Active Tasks ──");
+    for (const t of stats.activeTasks) {
+      console.log(`  ${t.status.padEnd(10)}  ${t.taskId?.slice(0, 16) || "?"}  ${t.title || "(untitled)"}  claimed: ${t.claimedAt}`);
+    }
+    console.log("");
+  }
+
+  if (stats.completedHistory.length > 0) {
+    console.log("  ── Recent Completed ──");
+    for (const t of stats.completedHistory) {
+      console.log(`  ${t.taskId?.slice(0, 16) || "?"}  ${t.title || "(untitled)"}  bounty: ${t.bounty ?? "?"}  at: ${t.completedAt}`);
+    }
+    console.log("");
+  }
+}
+
 async function cmdResearch(args) {
   const flags = parseFlags(args);
   const { research } = await import("../../scripts/research-platform.js");
@@ -360,6 +493,8 @@ function cmdHelp() {
     peers                   View neighbor list
     leaderboard [--task-type X]  View model performance rankings
     sponsor [--add ...]     View or add sponsor grants
+    worker [--enable|--disable|--scan|--claim <id>|--domains x,y]
+                            View/control Worker Pool status
     publish-meta            Publish meta-genes to Hub
     research [--save] [--verbose]  Deep research on the EvoMap platform
     dashboard               Launch real-time visualization
@@ -384,6 +519,7 @@ const COMMANDS = {
   peers: cmdPeers,
   leaderboard: cmdLeaderboard,
   sponsor: cmdSponsor,
+  worker: cmdWorker,
   "publish-meta": cmdPublishMeta,
   research: cmdResearch,
   dashboard: cmdDashboard,

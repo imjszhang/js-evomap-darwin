@@ -271,8 +271,42 @@ export class HubClient {
 
   // ── Worker / Service ─────────────────────────────────────────────────
 
+  async registerWorker({ enabled = true, domains, maxLoad, dailyCreditCap } = {}) {
+    const body = { sender_id: this.#nodeId, enabled };
+    if (domains) body.domains = domains;
+    if (maxLoad != null) body.max_load = maxLoad;
+    if (dailyCreditCap != null) body.daily_credit_cap = dailyCreditCap;
+    return this.#fetch("/a2a/worker/register", body);
+  }
+
   async getAvailableWork() {
     return this.#get(`/a2a/work/available?node_id=${this.#nodeId}`);
+  }
+
+  async claimWork(taskId) {
+    return this.#fetch("/a2a/work/claim", {
+      sender_id: this.#nodeId,
+      task_id: taskId,
+    });
+  }
+
+  async acceptWork(assignmentId) {
+    return this.#fetch("/a2a/work/accept", {
+      sender_id: this.#nodeId,
+      assignment_id: assignmentId,
+    });
+  }
+
+  async completeWork(assignmentId, resultAssetId) {
+    return this.#fetch("/a2a/work/complete", {
+      sender_id: this.#nodeId,
+      assignment_id: assignmentId,
+      result_asset_id: resultAssetId,
+    });
+  }
+
+  async getMyWork() {
+    return this.#get(`/a2a/work/my?node_id=${this.#nodeId}`);
   }
 
   async searchServices(query) {

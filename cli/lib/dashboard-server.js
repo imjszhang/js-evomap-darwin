@@ -192,6 +192,27 @@ export function startDashboardServer(darwin, { port = 3777 } = {}) {
     pushEvent("error", msg);
     broadcast({ type: "event", data: { type: "error", message: msg } });
   });
+  darwin.on("task-matched", (data) => {
+    const msg = `Matched ${data.count} task(s), top: ${data.top?.task?.title || "?"} (score ${data.top?.matchScore})`;
+    pushEvent("task-matched", msg);
+    broadcast({ type: "event", data: { type: "task-matched", message: msg } });
+    if (darwin.worker) broadcast({ type: "worker", data: darwin.worker.getStats() });
+  });
+  darwin.on("task-completed", (data) => {
+    const msg = `Completed task "${data.title}" → asset ${data.assetId?.slice(0, 16)}...`;
+    pushEvent("task-completed", msg);
+    broadcast({ type: "event", data: { type: "task-completed", message: msg } });
+    if (darwin.worker) {
+      const stats = darwin.worker.getStats();
+      broadcast({ type: "worker", data: stats });
+      broadcast({ type: "tasks", data: { activeTasks: stats.activeTasks, completedHistory: stats.completedHistory } });
+    }
+  });
+  darwin.on("task-failed", (data) => {
+    const msg = `Task ${data.taskId} failed: ${data.error}`;
+    pushEvent("task-failed", msg);
+    broadcast({ type: "event", data: { type: "task-failed", message: msg } });
+  });
 
   // Periodic status push
   const statusInterval = setInterval(() => {

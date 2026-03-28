@@ -379,6 +379,87 @@
   .panel.span-2 {
     grid-column: span 2;
   }
+  .worker-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .worker-badge.on  { background: rgba(0,255,136,0.15); color: var(--accent); }
+  .worker-badge.off { background: rgba(102,102,102,0.15); color: var(--dim); }
+  .match-row {
+    display: flex;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    align-items: center;
+  }
+  .match-row .score {
+    min-width: 44px;
+    text-align: right;
+    font-weight: 600;
+    color: var(--accent3);
+  }
+  .match-row .mtitle {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .match-row .signals {
+    font-size: 10px;
+    color: var(--dim);
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .domain-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    margin: 2px;
+    border-radius: 3px;
+    font-size: 10px;
+    background: rgba(78,205,196,0.12);
+    color: var(--accent3);
+    border: 1px solid rgba(78,205,196,0.3);
+  }
+  .active-task {
+    padding: 6px 10px;
+    margin-bottom: 4px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .active-task .at-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .active-task .at-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .active-task .at-status {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+  }
+  .active-task .at-status.claimed   { color: var(--accent2); }
+  .active-task .at-status.completed { color: var(--accent); }
+  .active-task .at-meta {
+    font-size: 10px;
+    color: var(--dim);
+    margin-top: 2px;
+  }
 </style>
 </head>
 <body>
@@ -483,7 +564,36 @@
       <canvas id="tokenChart" style="display:none"></canvas>
     </div>
 
-    <!-- Row 6 -->
+    <!-- Row 6: Worker -->
+    <div class="panel">
+      <h2>Worker Status</h2>
+      <div id="workerPanel">
+        <div class="stat-row"><span class="stat-label">Worker</span><span id="workerBadge"><span class="worker-badge off">off</span></span></div>
+        <div class="stat-row"><span class="stat-label">Auto Submit</span><span class="stat-value" id="workerAutoSubmit">—</span></div>
+        <div class="stat-row"><span class="stat-label">Domains</span><span id="workerDomains" style="font-size:11px">—</span></div>
+        <div class="stat-row"><span class="stat-label">Scanned</span><span class="stat-value" id="workerScanned">0</span></div>
+        <div class="stat-row"><span class="stat-label">Matched</span><span class="stat-value" id="workerMatched">0</span></div>
+        <div class="stat-row"><span class="stat-label">Claimed</span><span class="stat-value" id="workerClaimed">0</span></div>
+        <div class="stat-row"><span class="stat-label">Completed</span><span class="stat-value good" id="workerCompleted">0</span></div>
+        <div class="stat-row"><span class="stat-label">Failed</span><span class="stat-value" id="workerFailed">0</span></div>
+        <div style="margin-top:10px">
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:4px">Recent Matches</div>
+          <div id="workerMatches" style="max-height:140px; overflow-y:auto"><div style="color:var(--dim)">No scan results</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>My Tasks</h2>
+      <div id="myTasksPanel">
+        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px">Active</div>
+        <div id="activeTasks"><div style="color:var(--dim)">No active tasks</div></div>
+        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px; margin-top:12px">Completed (recent)</div>
+        <div id="completedTasks" style="max-height:160px; overflow-y:auto"><div style="color:var(--dim)">No completed tasks</div></div>
+      </div>
+    </div>
+
+    <!-- Row 7 -->
     <div class="panel span-2">
       <h2>Darwin Says</h2>
       <div class="event-log" id="eventLog"></div>
@@ -614,7 +724,7 @@ function connectWS() {
 
 async function pollAPI() {
   try {
-    const [status, genes, peers, leaderboard, heartbeatState, sponsor, events] = await Promise.all([
+    const [status, genes, peers, leaderboard, heartbeatState, sponsor, events, workerData, tasksData] = await Promise.all([
       fetch(`${API_BASE}/status`).then(r => r.json()),
       fetch(`${API_BASE}/genes`).then(r => r.json()),
       fetch(`${API_BASE}/peers`).then(r => r.json()),
@@ -622,6 +732,8 @@ async function pollAPI() {
       fetch(`${API_BASE}/heartbeat`).then(r => r.json()).catch(() => null),
       fetch(`${API_BASE}/sponsor`).then(r => r.json()).catch(() => null),
       fetch(`${API_BASE}/events?since=${lastEventId}`).then(r => r.json()).catch(() => []),
+      fetch(`${API_BASE}/worker`).then(r => r.json()).catch(() => null),
+      fetch(`${API_BASE}/tasks`).then(r => r.json()).catch(() => null),
     ]);
     document.getElementById('statusDot').classList.add('online');
     document.getElementById('statusText').textContent = 'Connected (REST)';
@@ -630,6 +742,8 @@ async function pollAPI() {
     updatePeers(peers);
     updateLeaderboard(leaderboard);
     if (sponsor) updateSponsor(sponsor);
+    if (workerData) updateWorker(workerData);
+    if (tasksData) updateMyTasks(tasksData);
     const hb = status.heartbeat || heartbeatState?.lastHeartbeat;
     if (hb) updateHeartbeat(hb, heartbeatState?.history);
     if (events && events.length > 0) {
@@ -656,6 +770,8 @@ function handleMessage(msg) {
   if (msg.type === 'peers') updatePeers(msg.data);
   if (msg.type === 'leaderboard') updateLeaderboard(msg.data);
   if (msg.type === 'sponsor') updateSponsor(msg.data);
+  if (msg.type === 'worker') updateWorker(msg.data);
+  if (msg.type === 'tasks') updateMyTasks(msg.data);
 }
 
 function updateStatus(s) {
@@ -700,6 +816,8 @@ function updateStatus(s) {
   if (s.sponsor) {
     updateSponsor(s.sponsor);
   }
+
+  if (s.worker) updateWorker(s.worker);
 
   if (s.heartbeat) updateHeartbeat(s.heartbeat);
 }
@@ -976,6 +1094,76 @@ function updateTopicClimate(climate) {
   }
 
   el.innerHTML = html || '<div style="color:var(--dim)">No climate data</div>';
+}
+
+function updateWorker(data) {
+  if (!data) return;
+  const enabledBadge = data.workerEnabled
+    ? '<span class="worker-badge on">enabled</span>'
+    : '<span class="worker-badge off">disabled</span>';
+  document.getElementById('workerBadge').innerHTML = enabledBadge;
+  document.getElementById('workerAutoSubmit').textContent = data.autoSubmit ? 'On' : 'Off';
+
+  const domains = data.domains && data.domains.length > 0
+    ? data.domains.map(d => `<span class="domain-tag">${d}</span>`).join('')
+    : '<span style="color:var(--dim)">(any)</span>';
+  document.getElementById('workerDomains').innerHTML = domains;
+
+  const c = data.counters || {};
+  document.getElementById('workerScanned').textContent = c.scanned ?? 0;
+  document.getElementById('workerMatched').textContent = c.matched ?? 0;
+  document.getElementById('workerClaimed').textContent = c.claimed ?? 0;
+  document.getElementById('workerCompleted').textContent = c.completed ?? 0;
+  document.getElementById('workerFailed').textContent = c.failed ?? 0;
+
+  const matchEl = document.getElementById('workerMatches');
+  const results = data.lastScanResults || [];
+  if (results.length === 0) {
+    matchEl.innerHTML = '<div style="color:var(--dim)">No scan results</div>';
+  } else {
+    matchEl.innerHTML = results.slice(0, 8).map(r => `
+      <div class="match-row">
+        <span class="score">${(r.matchScore ?? 0).toFixed(3)}</span>
+        <span class="mtitle">${r.title || r.taskId || '—'}</span>
+        <span class="signals">${(r.matchedSignals || []).join(', ')}</span>
+      </div>
+    `).join('');
+  }
+}
+
+function updateMyTasks(data) {
+  if (!data) return;
+  const activeEl = document.getElementById('activeTasks');
+  const active = data.activeTasks || [];
+  if (active.length === 0) {
+    activeEl.innerHTML = '<div style="color:var(--dim)">No active tasks</div>';
+  } else {
+    activeEl.innerHTML = active.map(t => `
+      <div class="active-task">
+        <div class="at-header">
+          <span class="at-title">${t.title || t.taskId || '—'}</span>
+          <span class="at-status ${t.status || ''}">${t.status || '?'}</span>
+        </div>
+        <div class="at-meta">claimed ${timeAgo(t.claimedAt)}</div>
+      </div>
+    `).join('');
+  }
+
+  const compEl = document.getElementById('completedTasks');
+  const completed = data.completedHistory || [];
+  if (completed.length === 0) {
+    compEl.innerHTML = '<div style="color:var(--dim)">No completed tasks</div>';
+  } else {
+    compEl.innerHTML = completed.slice().reverse().map(t => `
+      <div class="active-task">
+        <div class="at-header">
+          <span class="at-title">${t.title || t.taskId || '—'}</span>
+          <span class="bounty-amount${(t.bounty ?? 0) > 0 ? '' : ' zero'}">${(t.bounty ?? 0) > 0 ? `¤${Number(t.bounty).toFixed(0)}` : 'Free'}</span>
+        </div>
+        <div class="at-meta">completed ${timeAgo(t.completedAt)}</div>
+      </div>
+    `).join('');
+  }
 }
 
 if (!IS_PLUGIN_MODE) {
