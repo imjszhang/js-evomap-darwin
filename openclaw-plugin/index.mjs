@@ -524,15 +524,17 @@ export default function register(api) {
   });
 
   api.registerHttpRoute({
-    path: `${ROUTE_PREFIX}/{filePath}`,
+    path: `${ROUTE_PREFIX}/`,
     auth: "plugin",
+    match: "prefix",
     async handler(req, res) {
       const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
       const subPath = decodeURIComponent(parsed.pathname.slice(ROUTE_PREFIX.length + 1));
+      if (!subPath || subPath === "/") {
+        return false;
+      }
       if (subPath.startsWith("api/")) {
-        res.writeHead(404, { "Content-Type": "text/plain" });
-        res.end("Not Found");
-        return true;
+        return false;
       }
       const filePath = nodePath.normalize(nodePath.join(DASHBOARD_DIR, subPath));
       if (!filePath.startsWith(DASHBOARD_DIR)) {

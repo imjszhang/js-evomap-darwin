@@ -1,11 +1,25 @@
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { join, dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DASHBOARD_HTML = join(__dirname, "..", "..", "dashboard", "index.html");
+const DASHBOARD_DIR = join(__dirname, "..", "..", "dashboard");
+const DASHBOARD_HTML = join(DASHBOARD_DIR, "index.html");
+const ASSETS_DIR = join(DASHBOARD_DIR, "assets");
+
+const MIME_TYPES = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".css": "text/css",
+  ".js": "application/javascript",
+};
 
 /**
  * Minimal dashboard server with WebSocket support (no external deps).
@@ -21,6 +35,25 @@ export function startDashboardServer(darwin, { port = 3777 } = {}) {
       res.end(html);
       return;
     }
+
+    if (req.url.startsWith("/assets/")) {
+      const rel = req.url.slice("/assets/".length).split("?")[0];
+      const filePath = resolve(ASSETS_DIR, rel);
+      if (!filePath.startsWith(ASSETS_DIR) || !existsSync(filePath)) {
+        res.writeHead(404);
+        res.end("Not Found");
+        return;
+      }
+      const mime = MIME_TYPES[extname(filePath).toLowerCase()] || "application/octet-stream";
+      const data = readFileSync(filePath);
+      res.writeHead(200, {
+        "Content-Type": mime,
+        "Cache-Control": "public, max-age=86400",
+      });
+      res.end(data);
+      return;
+    }
+
     res.writeHead(404);
     res.end("Not Found");
   });
