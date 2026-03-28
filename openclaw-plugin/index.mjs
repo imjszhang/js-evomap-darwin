@@ -1,5 +1,6 @@
 import nodePath from "node:path";
 import nodeFs from "node:fs";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const __dirname = nodePath.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +47,54 @@ function textResult(text) {
 
 function jsonResult(data) {
   return textResult(JSON.stringify(data, null, 2));
+}
+
+const HEARTBEAT_STATE_FILE = "heartbeat-state.json";
+const HEARTBEAT_HISTORY_MAX = 288;
+
+async function loadHeartbeatState(dataDir) {
+  try {
+    const raw = await readFile(nodePath.join(dataDir, HEARTBEAT_STATE_FILE), "utf-8");
+    return JSON.parse(raw);
+  } catch {
+    return { lastHeartbeat: null, history: [], nodeId: null, updatedAt: null };
+  }
+}
+
+async function saveHeartbeatState(dataDir, heartbeatResult, nodeId) {
+  await mkdir(dataDir, { recursive: true });
+  const statePath = nodePath.join(dataDir, HEARTBEAT_STATE_FILE);
+
+  const existing = await loadHeartbeatState(dataDir);
+  let history = existing.history || [];
+
+  const snapshot = {
+    timestamp: new Date().toISOString(),
+    status: heartbeatResult.status,
+    survivalStatus: heartbeatResult.survivalStatus,
+    creditBalance: heartbeatResult.creditBalance,
+    availableWork: heartbeatResult.availableWork,
+    nextHeartbeatMs: heartbeatResult.nextHeartbeatMs,
+    pendingEvents: heartbeatResult.pendingEvents,
+    raw: heartbeatResult.raw,
+  };
+
+  const historyEntry = { ...snapshot };
+  delete historyEntry.raw;
+  history.push(historyEntry);
+  if (history.length > HEARTBEAT_HISTORY_MAX) {
+    history = history.slice(-HEARTBEAT_HISTORY_MAX);
+  }
+
+  const state = {
+    lastHeartbeat: snapshot,
+    history,
+    nodeId: nodeId || existing.nodeId,
+    updatedAt: snapshot.timestamp,
+  };
+
+  await writeFile(statePath, JSON.stringify(state, null, 2));
+  return state;
 }
 
 let darwinInstance = null;
@@ -313,6 +362,43 @@ export default function register(api) {
     },
   }, { optional: true });
 
+  api.registerTool({
+    name: "darwin_heartbeat",
+    label: "Darwin: Heartbeat",
+    description:
+      "View heartbeat status or manually trigger a heartbeat to EvoMap Hub. " +
+      "Shows credit balance, available work, and node survival status.",
+    parameters: {
+      type: "object",
+      properties: {
+        trigger: { type: "boolean", description: "If true, send an immediate heartbeat to Hub" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const dataDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
+
+        if (params.trigger) {
+          const darwin = await getDarwin(pluginCfg);
+          if (!darwin.hub.nodeId) {
+            return textResult("Node not registered yet. Run darwin_evolve first.");
+          }
+          const result = await darwin.hub.heartbeat();
+          const state = await saveHeartbeatState(dataDir, result, darwin.hub.nodeId);
+          return jsonResult({ triggered: true, ...state.lastHeartbeat });
+        }
+
+        const state = await loadHeartbeatState(dataDir);
+        if (!state.lastHeartbeat) {
+          return textResult("No heartbeat data yet. The heartbeat service may not have run yet.");
+        }
+        return jsonResult(state);
+      } catch (err) {
+        return textResult(`Heartbeat failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
   // ── Gateway HTTP Routes: Dashboard + REST API ───────────────────────
 
   api.registerHttpRoute({
@@ -416,6 +502,20 @@ export default function register(api) {
   });
 
   api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/heartbeat`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const dataDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
+        const state = await loadHeartbeatState(dataDir);
+        sendJson(res, 200, state);
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+    },
+  });
+
+  api.registerHttpRoute({
     path: `${ROUTE_PREFIX}/{filePath}`,
     auth: "plugin",
     async handler(req, res) {
@@ -440,6 +540,57 @@ export default function register(api) {
       serveStaticFile(res, filePath);
     },
   });
+
+  // ── Background Heartbeat Service ─────────────────────────────────────
+
+  if (pluginCfg.heartbeatEnabled !== false) {
+    const heartbeatDataDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
+
+    api.registerService({
+      id: "darwin-heartbeat",
+      label: "Darwin Heartbeat",
+      async start({ signal }) {
+        const baseIntervalMs = pluginCfg.heartbeatIntervalMs || 300_000;
+        let nextIntervalMs = baseIntervalMs;
+        let timerId = null;
+
+        const runHeartbeat = async () => {
+          try {
+            const darwin = await getDarwin(pluginCfg);
+            if (!darwin.hub.nodeId) {
+              api.logger.warn("Heartbeat skipped: node not registered yet. Run darwin_evolve first.");
+              return;
+            }
+            const result = await darwin.hub.heartbeat();
+            await saveHeartbeatState(heartbeatDataDir, result, darwin.hub.nodeId);
+            if (result.nextHeartbeatMs && result.nextHeartbeatMs > 0) {
+              nextIntervalMs = result.nextHeartbeatMs;
+            }
+            api.logger.debug(
+              `Heartbeat OK | credits: ${result.creditBalance} | next: ${nextIntervalMs}ms`,
+            );
+          } catch (err) {
+            api.logger.error(`Heartbeat failed: ${err.message}`);
+          }
+        };
+
+        const scheduleNext = () => {
+          if (signal.aborted) return;
+          timerId = setTimeout(async () => {
+            await runHeartbeat();
+            scheduleNext();
+          }, nextIntervalMs);
+        };
+
+        signal.addEventListener("abort", () => {
+          if (timerId) clearTimeout(timerId);
+        });
+
+        await runHeartbeat();
+        scheduleNext();
+      },
+    });
+  }
 
   // ── CLI ───────────────────────────────────────────────────────────────
 

@@ -156,9 +156,11 @@ export class HubClient {
     return {
       status: res.status,
       creditBalance: res.credit_balance,
+      survivalStatus: res.survival_status,
       availableWork: res.available_work || [],
       nextHeartbeatMs: res.next_heartbeat_ms || 900000,
       pendingEvents: res.pending_events || [],
+      raw: res,
     };
   }
 

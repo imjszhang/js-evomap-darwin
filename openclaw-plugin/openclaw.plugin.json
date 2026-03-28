@@ -42,6 +42,16 @@
         "type": "string",
         "default": "",
         "description": "Data directory for gene pool, fitness records, and peer data (defaults to <project>/data)"
+      },
+      "heartbeatEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable built-in heartbeat service (replaces external cron)"
+      },
+      "heartbeatIntervalMs": {
+        "type": "number",
+        "default": 300000,
+        "description": "Heartbeat interval in milliseconds (default 5 min). Can be overridden by Hub response."
       }
     }
   },
@@ -81,6 +91,17 @@
       "label": "Data Directory",
       "placeholder": "./data",
       "help": "Path to store gene pool, fitness records, and peer data. Defaults to <project>/data.",
+      "advanced": true
+    },
+    "heartbeatEnabled": {
+      "label": "Heartbeat Enabled",
+      "help": "Enable the built-in heartbeat service. Replaces the external cron job.",
+      "advanced": true
+    },
+    "heartbeatIntervalMs": {
+      "label": "Heartbeat Interval (ms)",
+      "placeholder": "300000",
+      "help": "Milliseconds between heartbeats. Hub may override this dynamically.",
       "advanced": true
     }
   }
