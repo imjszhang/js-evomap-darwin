@@ -28,16 +28,45 @@ const MIME_TYPES = {
 export function startDashboardServer(darwin, { port = 3777 } = {}) {
   const clients = new Set();
 
+  const EVENT_BUFFER_MAX = 100;
+  const eventBuffer = [];
+  let eventIdCounter = 0;
+
+  function pushEvent(type, message) {
+    eventIdCounter++;
+    eventBuffer.push({ id: eventIdCounter, type, message, timestamp: new Date().toISOString() });
+    if (eventBuffer.length > EVENT_BUFFER_MAX) {
+      eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_MAX);
+    }
+  }
+
+  function sendJson(res, statusCode, body) {
+    const payload = JSON.stringify(body);
+    res.writeHead(statusCode, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(payload);
+  }
+
   const server = createServer((req, res) => {
-    if (req.url === "/" || req.url === "/index.html") {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+
+    if (url.pathname === "/" || url.pathname === "/index.html") {
       const html = readFileSync(DASHBOARD_HTML, "utf-8");
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(html);
       return;
     }
 
-    if (req.url.startsWith("/assets/")) {
-      const rel = req.url.slice("/assets/".length).split("?")[0];
+    if (url.pathname === "/api/events") {
+      const since = parseInt(url.searchParams.get("since") || "0", 10);
+      sendJson(res, 200, eventBuffer.filter((e) => e.id > since));
+      return;
+    }
+
+    if (url.pathname.startsWith("/assets/")) {
+      const rel = url.pathname.slice("/assets/".length).split("?")[0];
       const filePath = resolve(ASSETS_DIR, rel);
       if (!filePath.startsWith(ASSETS_DIR) || !existsSync(filePath)) {
         res.writeHead(404);
@@ -118,20 +147,25 @@ export function startDashboardServer(darwin, { port = 3777 } = {}) {
     return Buffer.concat([header, payload]);
   }
 
-  // Wire darwin events to WebSocket broadcasts
+  // Wire darwin events to WebSocket broadcasts + event buffer
   darwin.on("heartbeat", () => {
     broadcast({ type: "status", data: darwin.getStatus() });
   });
   darwin.on("fetch", (data) => {
-    broadcast({ type: "event", data: { type: "fetch", message: `Fetched ${data.total} assets, ingested ${data.ingested}` } });
+    const msg = `Fetched ${data.total} assets, ingested ${data.ingested}`;
+    pushEvent("fetch", msg);
+    broadcast({ type: "event", data: { type: "fetch", message: msg } });
     broadcast({ type: "genes", data: darwin.store.ranked(15) });
   });
   darwin.on("record", (data) => {
-    broadcast({ type: "event", data: { type: "record", message: `Recorded: ${data.capsuleId?.slice(0, 16)}... fitness=${data.fitness?.toFixed(3) ?? '?'}` } });
+    const msg = `Recorded: ${data.capsuleId?.slice(0, 16)}... fitness=${data.fitness?.toFixed(3) ?? '?'}`;
+    pushEvent("record", msg);
+    broadcast({ type: "event", data: { type: "record", message: msg } });
     broadcast({ type: "status", data: darwin.getStatus() });
   });
   darwin.on("evolve", () => {
     const status = darwin.getStatus();
+    pushEvent("evolve", "Evolution cycle completed");
     broadcast({ type: "status", data: status });
     broadcast({ type: "genes", data: darwin.store.ranked(15) });
     if (darwin.peers) {
@@ -146,13 +180,17 @@ export function startDashboardServer(darwin, { port = 3777 } = {}) {
     broadcast({ type: "event", data: { type: "evolve", message: "Evolution cycle completed" } });
   });
   darwin.on("grant-consumed", (data) => {
-    broadcast({ type: "event", data: { type: "sponsor", message: `Grant ${data.grantId.slice(0, 16)}... consumed ${data.amount} tokens (${data.phase})` } });
+    const msg = `Grant ${data.grantId.slice(0, 16)}... consumed ${data.amount} tokens (${data.phase})`;
+    pushEvent("sponsor", msg);
+    broadcast({ type: "event", data: { type: "sponsor", message: msg } });
     if (darwin.sponsor) {
       broadcast({ type: "sponsor", data: darwin.sponsor.getStats() });
     }
   });
   darwin.on("error", (e) => {
-    broadcast({ type: "event", data: { type: "error", message: `${e.phase}: ${e.error}` } });
+    const msg = `${e.phase}: ${e.error}`;
+    pushEvent("error", msg);
+    broadcast({ type: "event", data: { type: "error", message: msg } });
   });
 
   // Periodic status push

@@ -99,6 +99,19 @@ async function saveHeartbeatState(dataDir, heartbeatResult, nodeId) {
 
 let darwinInstance = null;
 
+const EVENT_BUFFER_MAX = 100;
+const eventBuffer = [];
+let eventIdCounter = 0;
+
+function pushEvent(type, message) {
+  eventIdCounter++;
+  const evt = { id: eventIdCounter, type, message, timestamp: new Date().toISOString() };
+  eventBuffer.push(evt);
+  if (eventBuffer.length > EVENT_BUFFER_MAX) {
+    eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_MAX);
+  }
+}
+
 async function getDarwin(pluginCfg) {
   if (darwinInstance) return darwinInstance;
 
@@ -119,6 +132,22 @@ async function getDarwin(pluginCfg) {
 
   darwinInstance.use(new Mutator({ mutationRate: pluginCfg.mutationRate || 0.05 }));
   darwinInstance.use(new PeerExchange({ hub: darwinInstance.hub, dataDir }));
+
+  darwinInstance.on("fetch", (data) => {
+    pushEvent("fetch", `Fetched ${data.total} assets, ingested ${data.ingested}`);
+  });
+  darwinInstance.on("record", (data) => {
+    pushEvent("record", `Recorded: ${data.capsuleId?.slice(0, 16)}... fitness=${data.fitness?.toFixed(3) ?? '?'}`);
+  });
+  darwinInstance.on("evolve", () => {
+    pushEvent("evolve", "Evolution cycle completed");
+  });
+  darwinInstance.on("error", (e) => {
+    pushEvent("error", `${e.phase}: ${e.error}`);
+  });
+  darwinInstance.on("grant-consumed", (data) => {
+    pushEvent("sponsor", `Grant ${data.grantId.slice(0, 16)}... consumed ${data.amount} tokens (${data.phase})`);
+  });
 
   return darwinInstance;
 }
@@ -519,6 +548,32 @@ export default function register(api) {
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/sponsor`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        sendJson(res, 200, darwin.sponsor?.getStats() ?? { totalGrants: 0 });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/events`,
+    auth: "plugin",
+    async handler(req, res) {
+      const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+      const since = parseInt(parsed.searchParams.get("since") || "0", 10);
+      const events = eventBuffer.filter((e) => e.id > since);
+      sendJson(res, 200, events);
       return true;
     },
   });

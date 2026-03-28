@@ -223,12 +223,15 @@ export class Darwin {
    */
   getStatus() {
     const hb = this.#lastHeartbeatResult;
+    const fitnessStats = this.#tracker.getStats();
     return {
       running: this.#running,
       nodeId: this.#hub.nodeId,
       hubUrl: this.#hub.hubUrl,
       geneStore: this.#store.getStats(),
-      fitness: this.#tracker.getStats(),
+      fitness: fitnessStats,
+      tokenBaseline: fitnessStats.totalBaselineTokens,
+      tokenDarwin: fitnessStats.totalTokensUsed,
       hasMutator: !!this.#mutator,
       hasPeerExchange: !!this.#peerExchange,
       peerCount: this.#peerExchange?.peerCount ?? 0,

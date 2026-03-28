@@ -427,6 +427,10 @@
         </div>
         <div class="hb-countdown"><div class="hb-countdown-fill" id="hbCountdownBar" style="width:0%"></div></div>
         <div class="stat-row" style="margin-top:4px"><span class="stat-label">Available Tasks</span><span class="stat-value" id="hbTaskCount">0</span></div>
+        <div style="margin-top:8px">
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:4px">Credit History</div>
+          <canvas id="creditChart" style="max-height:80px"></canvas>
+        </div>
       </div>
     </div>
 
@@ -475,7 +479,8 @@
 
     <div class="panel">
       <h2>Token Savings</h2>
-      <canvas id="tokenChart"></canvas>
+      <div id="tokenEmpty" style="color:var(--dim)">No token usage data yet</div>
+      <canvas id="tokenChart" style="display:none"></canvas>
     </div>
 
     <!-- Row 6 -->
@@ -494,6 +499,7 @@ const AVATAR_URL = IS_PLUGIN_MODE
   : '/assets/avatar.png';
 const POLL_INTERVAL_MS = 5000;
 const MODEL_COLORS = ['#00ff88', '#ff6b35', '#4ecdc4', '#a78bfa', '#f472b6', '#fbbf24', '#34d399', '#60a5fa'];
+let lastEventId = 0;
 
 // ── Charts ──────────────────────────────────────────────────────────────
 const fitnessCtx = document.getElementById('fitnessChart').getContext('2d');
@@ -551,6 +557,32 @@ const tokenChart = new Chart(tokenCtx, {
   }
 });
 
+const creditCtx = document.getElementById('creditChart').getContext('2d');
+const creditChart = new Chart(creditCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      data: [],
+      borderColor: '#a78bfa',
+      backgroundColor: 'rgba(167,139,250,0.1)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 1.5,
+    }]
+  },
+  options: {
+    responsive: true,
+    scales: {
+      x: { display: false },
+      y: { ticks: { color: '#666', font: { size: 9 } }, grid: { color: '#1e1e2e' } }
+    },
+    plugins: { legend: { display: false } }
+  }
+});
+const creditHistory = [];
+
 // ── Connection: WebSocket (standalone) or REST polling (plugin) ─────────
 let ws = null;
 let reconnectTimer = null;
@@ -582,12 +614,14 @@ function connectWS() {
 
 async function pollAPI() {
   try {
-    const [status, genes, peers, leaderboard, heartbeatState] = await Promise.all([
+    const [status, genes, peers, leaderboard, heartbeatState, sponsor, events] = await Promise.all([
       fetch(`${API_BASE}/status`).then(r => r.json()),
       fetch(`${API_BASE}/genes`).then(r => r.json()),
       fetch(`${API_BASE}/peers`).then(r => r.json()),
       fetch(`${API_BASE}/leaderboard`).then(r => r.json()),
       fetch(`${API_BASE}/heartbeat`).then(r => r.json()).catch(() => null),
+      fetch(`${API_BASE}/sponsor`).then(r => r.json()).catch(() => null),
+      fetch(`${API_BASE}/events?since=${lastEventId}`).then(r => r.json()).catch(() => []),
     ]);
     document.getElementById('statusDot').classList.add('online');
     document.getElementById('statusText').textContent = 'Connected (REST)';
@@ -595,8 +629,15 @@ async function pollAPI() {
     updateGenes(genes);
     updatePeers(peers);
     updateLeaderboard(leaderboard);
+    if (sponsor) updateSponsor(sponsor);
     const hb = status.heartbeat || heartbeatState?.lastHeartbeat;
-    if (hb) updateHeartbeat(hb);
+    if (hb) updateHeartbeat(hb, heartbeatState?.history);
+    if (events && events.length > 0) {
+      for (const evt of events) {
+        addEvent(evt);
+        if (evt.id > lastEventId) lastEventId = evt.id;
+      }
+    }
   } catch {
     document.getElementById('statusDot').classList.remove('online');
     document.getElementById('statusText').textContent = 'Polling failed';
@@ -643,7 +684,9 @@ function updateStatus(s) {
   fitnessChart.update('none');
 
   // Update token chart
-  if (s.tokenBaseline && s.tokenDarwin) {
+  if (s.tokenBaseline > 0 || s.tokenDarwin > 0) {
+    document.getElementById('tokenEmpty').style.display = 'none';
+    document.getElementById('tokenChart').style.display = '';
     tokenChart.data.datasets[0].data = [s.tokenBaseline, s.tokenDarwin];
     tokenChart.update('none');
   }
@@ -788,7 +831,7 @@ function timeAgo(isoString) {
   return `${hr}h ${min % 60}m ago`;
 }
 
-function updateHeartbeat(hb) {
+function updateHeartbeat(hb, historyArr) {
   const raw = hb.raw || {};
 
   // Survival badge
@@ -829,6 +872,33 @@ function updateHeartbeat(hb) {
   // Topic climate
   const climate = raw.topic_climate;
   if (climate) updateTopicClimate(climate);
+
+  // Credit history sparkline
+  updateCreditChart(hb, historyArr);
+}
+
+function updateCreditChart(hb, historyArr) {
+  if (historyArr && historyArr.length > 0) {
+    creditChart.data.labels = historyArr.map((h) => {
+      const t = h.timestamp;
+      return t ? t.slice(11, 16) : '';
+    });
+    creditChart.data.datasets[0].data = historyArr.map((h) => h.creditBalance ?? 0);
+    creditChart.update('none');
+    return;
+  }
+
+  const bal = hb.creditBalance ?? hb.raw?.credit_balance ?? 0;
+  const now = new Date().toISOString().slice(11, 16);
+  creditHistory.push(bal);
+  creditChart.data.labels.push(now);
+  creditChart.data.datasets[0].data.push(bal);
+  if (creditChart.data.labels.length > 60) {
+    creditChart.data.labels.shift();
+    creditChart.data.datasets[0].data.shift();
+    creditHistory.shift();
+  }
+  creditChart.update('none');
 }
 
 function startCountdown() {
@@ -915,7 +985,9 @@ if (!IS_PLUGIN_MODE) {
       updateStatus({
         nodeId: 'node_demo_00000000',
         geneStore: { size: 0, capacity: 200 },
-        fitness: { totalRecords: 0, trackedCapsules: 0, scoredCapsules: 0, avgFitness: 0, topFitness: 0 },
+        fitness: { totalRecords: 0, trackedCapsules: 0, scoredCapsules: 0, avgFitness: 0, topFitness: 0, totalTokensUsed: 0, totalBaselineTokens: 0, tokenSavingsRate: 0 },
+        tokenBaseline: 0,
+        tokenDarwin: 0,
         hasMutator: false,
         hasSponsor: false,
         peerCount: 0,

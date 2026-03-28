@@ -197,11 +197,17 @@ export class FitnessTracker {
   getStats() {
     let totalRecords = 0;
     let totalCapsules = 0;
+    let totalTokensUsed = 0;
+    let totalBaselineTokens = 0;
     const fitnessValues = [];
 
     for (const [capsuleId, records] of this.#records) {
       totalCapsules++;
       totalRecords += records.length;
+      for (const r of records) {
+        totalTokensUsed += r.tokens_used || 0;
+        totalBaselineTokens += r.baseline_tokens || 0;
+      }
       const f = this.getFitness(capsuleId);
       if (f !== null) fitnessValues.push(f);
     }
@@ -214,6 +220,11 @@ export class FitnessTracker {
         ? Math.round((fitnessValues.reduce((a, b) => a + b, 0) / fitnessValues.length) * 1000) / 1000
         : 0,
       topFitness: fitnessValues.length ? Math.max(...fitnessValues) : 0,
+      totalTokensUsed,
+      totalBaselineTokens,
+      tokenSavingsRate: totalBaselineTokens > 0
+        ? Math.round((1 - totalTokensUsed / totalBaselineTokens) * 1000) / 1000
+        : 0,
     };
   }
 
