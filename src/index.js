@@ -5,6 +5,7 @@ import { GeneStore } from "./gene-store.js";
 import { FitnessTracker } from "./fitness-tracker.js";
 import { CapsuleSelector } from "./capsule-selector.js";
 import { BootstrapEvaluator } from "./bootstrap-evaluator.js";
+import { getAllMetaGenes } from "./meta-genes.js";
 
 export { HubClient } from "./hub-client.js";
 export { GeneStore } from "./gene-store.js";
@@ -40,6 +41,8 @@ export class Darwin {
   #taskMatcher;
   #dataDir;
   #credentialsPath;
+
+  #agentCallback;
 
   #heartbeatTimer;
   #evolveTimer;
@@ -159,6 +162,9 @@ export class Darwin {
     const hbInterval = heartbeatMs || DEFAULT_HEARTBEAT_MS;
     const evInterval = evolveMs || DEFAULT_EVOLVE_MS;
 
+    // Seed meta-genes so they're available via selectCapsule
+    this.#seedMetaGenes();
+
     // Bootstrap: seed structural fitness scores when gene pool has no real data
     this.#runBootstrap();
 
@@ -257,6 +263,14 @@ export class Darwin {
   }
 
   /**
+   * Register an agent callback for agent-driven evolution.
+   * When set, #doEvolveCycle will invoke this instead of hardcoded Mutator logic.
+   */
+  setAgentCallback(fn) {
+    this.#agentCallback = typeof fn === "function" ? fn : null;
+  }
+
+  /**
    * Get comprehensive status for CLI / dashboard.
    */
   getStatus() {
@@ -293,6 +307,19 @@ export class Darwin {
   }
 
   // ── Private ───────────────────────────────────────────────────────────
+
+  #seedMetaGenes() {
+    try {
+      for (const { bundle } of getAllMetaGenes()) {
+        const capsule = bundle[1];
+        if (capsule?.asset_id && !this.#store.has(capsule.asset_id)) {
+          this.#store.add(capsule, 0);
+        }
+      }
+    } catch {
+      // Best-effort — never block startup
+    }
+  }
 
   #runBootstrap() {
     try {
@@ -342,8 +369,17 @@ export class Darwin {
       const signals = this.#getActiveSignals();
       await this.fetchAndIngest(signals.length > 0 ? signals : undefined);
 
-      // 2. Mutator cycle (if attached) — use sponsor grant when available
-      if (this.#mutator && typeof this.#mutator.cycle === "function") {
+      // 2. Agent-driven evolution (preferred) or fallback to Mutator
+      if (this.#agentCallback) {
+        try {
+          await this.#agentCallback(this);
+          this.#emit("evolve-think", { timestamp: new Date().toISOString() });
+        } catch {
+          // Agent unavailable — fall through to hardcoded fallback below
+        }
+      }
+
+      if (!this.#agentCallback && this.#mutator && typeof this.#mutator.cycle === "function") {
         let grant = null;
         if (this.#sponsor) {
           grant = this.#sponsor.getAvailableGrant("mutation");

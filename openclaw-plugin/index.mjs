@@ -178,6 +178,10 @@ async function getDarwin(pluginCfg) {
     pushEvent("bootstrap", `Bootstrap evaluated ${data.evaluated} capsule(s), avg score: ${data.avgScore}`);
   });
 
+  darwinInstance.setAgentCallback(async () => {
+    pushEvent("evolve-think", "Agent-driven evolution cycle — darwin_think available");
+  });
+
   return darwinInstance;
 }
 
@@ -189,7 +193,9 @@ export default function register(api) {
   api.registerTool({
     name: "darwin_status",
     label: "Darwin: Status",
-    description: "Show Darwin evolution engine status — node info, gene pool size, fitness stats, peer count.",
+    description:
+      "Show Darwin evolution engine status — node info, gene pool size, fitness stats, peer count. " +
+      "For actionable evolution recommendations based on meta-gene strategies, call darwin_think instead.",
     parameters: { type: "object", properties: {} },
     async execute() {
       try {
@@ -298,6 +304,7 @@ export default function register(api) {
     description:
       "Run one evolution cycle: fetch Capsules from Hub, ingest into local pool, " +
       "update fitness scores, maybe mutate, maybe exchange with peers. " +
+      "For intelligent evolution guided by meta-gene strategies, use darwin_think instead. " +
       "Call this periodically or use cron for automated evolution.",
     parameters: { type: "object", properties: {} },
     async execute() {
@@ -625,12 +632,150 @@ export default function register(api) {
   }, { optional: true });
 
   api.registerTool({
+    name: "darwin_think",
+    label: "Darwin: Evolution Advisor",
+    description:
+      "Analyze current evolution state and return actionable recommendations with " +
+      "full meta-gene strategy text. Call this to decide what evolution action to take next: " +
+      "A/B test untested capsules, mutate high-fitness capsules, review selection rankings, " +
+      "or evaluate peer subscriptions. Each recommendation includes the complete strategy " +
+      "from the relevant meta-gene — read it and follow the instructions, then use " +
+      "darwin_select and darwin_record to execute.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const storeStats = darwin.store.getStats();
+        const trackerStats = darwin.tracker.getStats();
+
+        const allGenes = darwin.store.ranked(storeStats.capacity || 200);
+        const unscoredCapsules = [];
+        const scoredCapsules = [];
+        for (const g of allGenes) {
+          const samples = darwin.tracker.getSampleCount(g.assetId);
+          if (samples < 3) unscoredCapsules.push({ ...g, samples });
+          else scoredCapsules.push({ ...g, samples });
+        }
+
+        const state = {
+          poolSize: storeStats.size,
+          capacity: storeStats.capacity,
+          avgFitness: storeStats.avgFitness,
+          topFitness: storeStats.topFitness,
+          totalRecords: trackerStats.totalRecords,
+          scoredCapsules: scoredCapsules.length,
+          unscoredCapsules: unscoredCapsules.length,
+          tokenSavingsRate: trackerStats.tokenSavingsRate,
+        };
+
+        const recommendations = [];
+
+        // 1. A/B Test: unscored capsules need testing
+        if (unscoredCapsules.length > 0) {
+          const pick = unscoredCapsules[Math.floor(Math.random() * unscoredCapsules.length)];
+          const metaGene = darwin.selectCapsule("capsule-selection");
+          recommendations.push({
+            priority: 1,
+            type: "ab_test",
+            reason: `${unscoredCapsules.length} capsule(s) have fewer than 3 samples and need A/B testing`,
+            targetCapsuleId: pick.assetId,
+            targetSummary: pick.capsule?.summary || "(no summary)",
+            targetTriggers: pick.capsule?.trigger || pick.capsule?.signals_match || [],
+            samples: pick.samples,
+            strategy: metaGene?.capsule?.content || "No A/B Test meta-gene found. Basic approach: run task without capsule for baseline, then with capsule, compare token usage.",
+          });
+        }
+
+        // 2. Mutation: high-fitness capsules with enough samples are mutation candidates
+        const mutationCandidates = scoredCapsules.filter((g) => g.samples >= 5 && g.fitness > 0);
+        if (mutationCandidates.length > 0) {
+          const top = mutationCandidates[0];
+          const metaGene = darwin.selectCapsule("mutation");
+          recommendations.push({
+            priority: 2,
+            type: "mutation",
+            reason: `Capsule with fitness ${top.fitness.toFixed(3)} and ${top.samples} samples is a good mutation candidate`,
+            targetCapsuleId: top.assetId,
+            targetSummary: top.capsule?.summary || "(no summary)",
+            targetStrategy: top.capsule?.strategy,
+            fitness: top.fitness,
+            samples: top.samples,
+            strategy: metaGene?.capsule?.content || "No Mutation meta-gene found. Basic approach: tweak numeric parameters (+1/-1/x1.5/x0.5), test variant, keep if better.",
+          });
+        }
+
+        // 3. Fitness Selection: review rankings when multiple scored capsules exist
+        const taskTypes = new Set();
+        for (const g of allGenes) {
+          const triggers = g.capsule?.trigger || g.capsule?.signals_match || [];
+          for (const t of triggers) taskTypes.add(t);
+        }
+        const competitiveTypes = [];
+        for (const tt of taskTypes) {
+          const ranked = darwin.tracker.rank(tt);
+          if (ranked.length >= 2) competitiveTypes.push({ taskType: tt, count: ranked.length, top: ranked[0] });
+        }
+        if (competitiveTypes.length > 0) {
+          const metaGene = darwin.selectCapsule("fitness-selection");
+          recommendations.push({
+            priority: 3,
+            type: "fitness_review",
+            reason: `${competitiveTypes.length} task type(s) have multiple scored capsules — review if the best is being used`,
+            competitiveTypes: competitiveTypes.slice(0, 5).map((c) => ({
+              taskType: c.taskType,
+              candidates: c.count,
+              topFitness: c.top.fitness,
+            })),
+            strategy: metaGene?.capsule?.content || "No Fitness Selection meta-gene found. Basic approach: rank by local fitness = success_rate * token_savings, prefer highest.",
+          });
+        }
+
+        // 4. Peer Subscription: evaluate if subscription is active
+        const sub = darwin.subscription;
+        if (sub) {
+          const subStats = sub.getStats();
+          const newGenesCount = allGenes.filter((g) => {
+            const samples = darwin.tracker.getSampleCount(g.assetId);
+            return samples === 0;
+          }).length;
+          if (newGenesCount > 0 || subStats.subscriptions > 0) {
+            const metaGene = darwin.selectCapsule("subscription");
+            recommendations.push({
+              priority: 4,
+              type: "peer_evaluation",
+              reason: `${newGenesCount} untested gene(s) from peers; ${subStats.subscriptions} active subscription(s)`,
+              subscriptions: subStats.subscriptions,
+              subscribers: subStats.subscribers,
+              strategy: metaGene?.capsule?.content || "No Subscription meta-gene found. Basic approach: A/B test peer genes, send feedback, unsubscribe from low-trust peers.",
+            });
+          }
+        }
+
+        if (recommendations.length === 0) {
+          recommendations.push({
+            priority: 1,
+            type: "idle",
+            reason: "Gene pool is healthy. Consider fetching new capsules or running more tasks to gather fitness data.",
+            strategy: null,
+          });
+        }
+
+        return jsonResult({ state, recommendations });
+      } catch (err) {
+        return textResult(`Think failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
     name: "darwin_select",
     label: "Darwin: Select Capsule",
     description:
       "Select the best Capsule strategy for a given task type. " +
       "Returns the capsule content/strategy so you can follow it when executing the task. " +
-      "After completing the task, call darwin_record to report the result.",
+      "After completing the task, call darwin_record to report the result. " +
+      "For evolution decisions, use signal types like 'capsule-selection', 'mutation', " +
+      "'fitness-selection', or 'subscription' to retrieve meta-gene strategies.",
     parameters: {
       type: "object",
       properties: {
