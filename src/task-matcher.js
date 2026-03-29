@@ -329,6 +329,9 @@ export class TaskMatcher {
     return this.#lastScanResults;
   }
 
+  /** Re-read worker-state.json (useful when external tools modify the file). */
+  reload() { this.#load(); }
+
   // ── Persistence ────────────────────────────────────────────────────────
 
   #load() {

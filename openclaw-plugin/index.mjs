@@ -1123,6 +1123,7 @@ export default function register(api) {
     async handler(_req, res) {
       try {
         const darwin = await getDarwin(pluginCfg);
+        darwin.worker?.reload?.();
         const stats = darwin.worker?.getStats();
         sendJson(res, 200, {
           activeTasks: stats?.activeTasks ?? [],
