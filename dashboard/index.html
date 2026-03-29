@@ -431,12 +431,14 @@
     border: 1px solid rgba(78,205,196,0.3);
   }
   .active-task {
-    padding: 6px 10px;
-    margin-bottom: 4px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
     border: 1px solid var(--border);
     border-radius: 4px;
     font-size: 12px;
   }
+  .active-task.task-failed { border-left: 3px solid var(--danger); }
+  .active-task.task-ok { border-left: 3px solid var(--accent); }
   .active-task .at-header {
     display: flex;
     justify-content: space-between;
@@ -455,10 +457,51 @@
   }
   .active-task .at-status.claimed   { color: var(--accent2); }
   .active-task .at-status.completed { color: var(--accent); }
+  .active-task .at-status.failed    { color: var(--danger); }
   .active-task .at-meta {
     font-size: 10px;
     color: var(--dim);
     margin-top: 2px;
+  }
+  .at-detail {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+    font-size: 10px;
+    align-items: center;
+  }
+  .at-detail .match-score {
+    color: var(--accent3);
+    font-weight: 600;
+  }
+  .at-detail .signal-tag {
+    background: rgba(78,205,196,0.12);
+    color: var(--accent3);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+  }
+  .at-steps {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+    font-size: 10px;
+    align-items: center;
+  }
+  .at-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .at-step.ok { color: var(--accent); }
+  .at-step.fail { color: var(--danger); }
+  .at-step.pending { color: var(--dim); }
+  .at-step-arrow { color: var(--dim); font-size: 8px; margin: 0 2px; }
+  .at-contrib {
+    font-size: 10px;
+    color: var(--accent4);
+    margin-top: 3px;
   }
   .rev-panel-inner {
     display: flex;
@@ -583,6 +626,9 @@
   .chat-bubble.pending-event { border-left-color: var(--accent2); }
   .chat-bubble.grant-consumed { border-left-color: var(--accent4); }
   .chat-bubble.task-matched { border-left-color: var(--accent3); }
+  .chat-bubble.task-claimed { border-left-color: #4a9eff; }
+  .chat-bubble.task-validated { border-left-color: #ffc107; }
+  .chat-bubble.task-published { border-left-color: var(--accent4); }
   .chat-bubble.task-completed { border-left-color: var(--accent); }
   .chat-bubble.task-failed { border-left-color: var(--danger); }
   .chat-bubble.bootstrap { border-left-color: var(--accent3); }
@@ -786,7 +832,7 @@
         <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px">Active</div>
         <div id="activeTasks"><div style="color:var(--dim)">No active tasks</div></div>
         <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px; margin-top:12px">Completed (recent)</div>
-        <div id="completedTasks" style="max-height:160px; overflow-y:auto"><div style="color:var(--dim)">No completed tasks</div></div>
+        <div id="completedTasks" style="max-height:260px; overflow-y:auto"><div style="color:var(--dim)">No completed tasks</div></div>
       </div>
     </div>
 
@@ -1466,6 +1512,73 @@ function updateWorker(data) {
   }
 }
 
+function renderSignalTags(signals) {
+  if (!signals || signals.length === 0) return '';
+  return signals.slice(0, 4).map(s => `<span class="signal-tag">${s}</span>`).join('');
+}
+
+function renderStepIcon(ok, label) {
+  if (ok === true) return `<span class="at-step ok">&#10003; ${label}</span>`;
+  if (ok === false) return `<span class="at-step fail">&#10007; ${label}</span>`;
+  return `<span class="at-step pending">&#9675; ${label}</span>`;
+}
+
+function renderTaskCard(t) {
+  const isFailed = t.status === 'failed';
+  const isCompleted = t.status === 'completed';
+  const cls = isFailed ? 'task-failed' : isCompleted ? 'task-ok' : '';
+
+  let detailHtml = '';
+  if (t.matchScore != null) {
+    detailHtml += `<div class="at-detail">
+      <span class="match-score">${t.matchScore.toFixed(3)}</span>
+      ${renderSignalTags(t.matchedSignals)}
+      ${t.capsuleSource ? `<span class="source-tag ${t.capsuleSource}">${t.capsuleSource.toUpperCase()}</span>` : ''}
+    </div>`;
+  }
+
+  if (t.validateOk != null || t.publishOk != null || isCompleted || isFailed) {
+    detailHtml += `<div class="at-steps">
+      ${renderStepIcon(true, 'claim')}
+      <span class="at-step-arrow">&#8594;</span>
+      ${renderStepIcon(t.validateOk, 'validate')}
+      <span class="at-step-arrow">&#8594;</span>
+      ${renderStepIcon(t.publishOk, 'publish')}
+      <span class="at-step-arrow">&#8594;</span>
+      ${renderStepIcon(isCompleted ? true : isFailed ? false : null, 'complete')}
+    </div>`;
+  }
+
+  if (t.hubContribution != null) {
+    detailHtml += `<div class="at-contrib">contribution: ${t.hubContribution}</div>`;
+  }
+  if (isFailed && t.error) {
+    detailHtml += `<div class="at-meta" style="color:var(--danger)">${t.error}</div>`;
+  }
+
+  const timeLabel = isFailed
+    ? `failed ${timeAgo(t.failedAt || t.claimedAt)}`
+    : isCompleted
+      ? `completed ${timeAgo(t.completedAt)}`
+      : `claimed ${timeAgo(t.claimedAt)}`;
+
+  const bountyHtml = (t.bounty ?? 0) > 0
+    ? `<span class="bounty-amount">¤${Number(t.bounty).toFixed(0)}</span>`
+    : isCompleted || isFailed
+      ? '<span class="bounty-amount zero">Free</span>'
+      : '';
+
+  return `<div class="active-task ${cls}">
+    <div class="at-header">
+      <span class="at-title">${t.title || t.taskId || '—'}</span>
+      <span class="at-status ${t.status || ''}">${t.status || '?'}</span>
+    </div>
+    ${t.capsuleSummary ? `<div class="at-meta" style="color:var(--text);opacity:0.7">${(t.capsuleSummary || '').slice(0, 60)}</div>` : ''}
+    ${detailHtml}
+    <div class="at-meta">${timeLabel} ${bountyHtml}</div>
+  </div>`;
+}
+
 function updateMyTasks(data) {
   if (!data) return;
   const activeEl = document.getElementById('activeTasks');
@@ -1473,15 +1586,7 @@ function updateMyTasks(data) {
   if (active.length === 0) {
     activeEl.innerHTML = '<div style="color:var(--dim)">No active tasks</div>';
   } else {
-    activeEl.innerHTML = active.map(t => `
-      <div class="active-task">
-        <div class="at-header">
-          <span class="at-title">${t.title || t.taskId || '—'}</span>
-          <span class="at-status ${t.status || ''}">${t.status || '?'}</span>
-        </div>
-        <div class="at-meta">claimed ${timeAgo(t.claimedAt)}</div>
-      </div>
-    `).join('');
+    activeEl.innerHTML = active.map(renderTaskCard).join('');
   }
 
   const compEl = document.getElementById('completedTasks');
@@ -1489,15 +1594,7 @@ function updateMyTasks(data) {
   if (completed.length === 0) {
     compEl.innerHTML = '<div style="color:var(--dim)">No completed tasks</div>';
   } else {
-    compEl.innerHTML = completed.slice().reverse().map(t => `
-      <div class="active-task">
-        <div class="at-header">
-          <span class="at-title">${t.title || t.taskId || '—'}</span>
-          <span class="bounty-amount${(t.bounty ?? 0) > 0 ? '' : ' zero'}">${(t.bounty ?? 0) > 0 ? `¤${Number(t.bounty).toFixed(0)}` : 'Free'}</span>
-        </div>
-        <div class="at-meta">completed ${timeAgo(t.completedAt)}</div>
-      </div>
-    `).join('');
+    compEl.innerHTML = completed.slice().reverse().map(renderTaskCard).join('');
   }
 }
 

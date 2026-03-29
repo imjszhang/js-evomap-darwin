@@ -168,8 +168,18 @@ async function getDarwin(pluginCfg) {
   darwinInstance.on("task-matched", (data) => {
     pushEvent("task-matched", `Matched ${data.count} task(s), top: ${data.top?.task?.title || "?"} (score ${data.top?.matchScore})`);
   });
+  darwinInstance.on("task-claimed", (data) => {
+    pushEvent("task-claimed", `Claimed "${data.title}" (match ${data.matchScore}, signals: ${(data.matchedSignals || []).join(", ")})`);
+  });
+  darwinInstance.on("task-validated", (data) => {
+    pushEvent("task-validated", `Validate ${data.valid ? "OK" : "FAIL"} for ${data.assetId?.slice(0, 20)}...`);
+  });
+  darwinInstance.on("task-published", (data) => {
+    pushEvent("task-published", `Published bundle (${data.bundleSize} assets: Gene+Capsule+Event)`);
+  });
   darwinInstance.on("task-completed", (data) => {
-    pushEvent("task-completed", `Completed task "${data.title}" → asset ${data.assetId?.slice(0, 16)}...`);
+    const contrib = data.contribution != null ? `, contribution=${data.contribution}` : "";
+    pushEvent("task-completed", `Completed "${data.title}" → asset ${data.assetId?.slice(0, 16)}...${contrib}`);
   });
   darwinInstance.on("task-failed", (data) => {
     pushEvent("task-failed", `Task ${data.taskId} failed: ${data.error}`);
@@ -1118,6 +1128,7 @@ export default function register(api) {
           activeTasks: stats?.activeTasks ?? [],
           completedHistory: stats?.completedHistory ?? [],
           lastScanResults: stats?.lastScanResults ?? [],
+          counters: stats?.counters ?? {},
         });
       } catch (err) {
         sendJson(res, 500, { error: err.message });
