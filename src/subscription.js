@@ -558,7 +558,7 @@ export class Subscription {
       const genes = payload.genes.slice(0, MAX_GENES_PER_DELIVERY);
       for (const gene of genes) {
         if (gene.capsule && gene.asset_id && !darwin.store.has(gene.asset_id)) {
-          darwin.store.add(gene.capsule, 0);
+          darwin.store.add(gene.capsule, 0, "subscription");
         }
       }
     }
@@ -607,7 +607,7 @@ export class Subscription {
 
   #handleGeneResponse(fromId, payload, darwin) {
     if (payload.capsule && payload.capsule.asset_id) {
-      darwin.store.add(payload.capsule, 0);
+      darwin.store.add(payload.capsule, 0, "subscription");
     }
   }
 

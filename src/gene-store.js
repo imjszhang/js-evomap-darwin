@@ -11,7 +11,7 @@ const MAX_CAPSULE_SIZE = 50_000;
 export class GeneStore {
   #filePath;
   #capacity;
-  #genes; // Map<asset_id, { capsule, addedAt, fitness }>
+  #genes; // Map<asset_id, { capsule, addedAt, fitness, source }>
 
   constructor({ dataDir = "./data", capacity = DEFAULT_CAPACITY } = {}) {
     mkdirSync(dataDir, { recursive: true });
@@ -37,7 +37,7 @@ export class GeneStore {
    * - Fails structural validation (#isValidCapsule)
    * - Pool is full and the new fitness does not exceed the current lowest
    */
-  add(capsule, fitness = null) {
+  add(capsule, fitness = null, source = "hub") {
     if (!this.#isValidCapsule(capsule)) return false;
     const id = capsule.asset_id;
 
@@ -45,6 +45,8 @@ export class GeneStore {
       const entry = this.#genes.get(id);
       entry.capsule = capsule;
       if (fitness !== null) entry.fitness = fitness;
+      if (source !== "hub") entry.source = source;
+      else if (!entry.source) entry.source = source;
       this.#save();
       return true;
     }
@@ -59,6 +61,7 @@ export class GeneStore {
       capsule,
       addedAt: new Date().toISOString(),
       fitness: fitness ?? 0,
+      source,
     });
     this.#save();
     return true;
@@ -129,6 +132,16 @@ export class GeneStore {
     };
   }
 
+  getSourceBreakdown() {
+    const counts = { hub: 0, mutation: 0, peer: 0, subscription: 0, meta: 0 };
+    for (const [, entry] of this.#genes) {
+      const src = entry.source || "hub";
+      if (src in counts) counts[src]++;
+      else counts.hub++;
+    }
+    return counts;
+  }
+
   toJSON() {
     const obj = {};
     for (const [id, entry] of this.#genes) {
@@ -181,6 +194,9 @@ export class GeneStore {
     try {
       const raw = JSON.parse(readFileSync(this.#filePath, "utf-8"));
       for (const [id, entry] of Object.entries(raw)) {
+        if (!entry.source) {
+          entry.source = entry.capsule?._mutation ? "mutation" : "hub";
+        }
         this.#genes.set(id, entry);
       }
     } catch {

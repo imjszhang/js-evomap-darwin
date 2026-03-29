@@ -156,7 +156,7 @@ export class PeerExchange {
                   const assets = res?.payload?.assets || res?.assets || [];
                   for (const asset of assets) {
                     if (asset.asset_id === gene.asset_id) {
-                      darwin.store.add(asset, 0); // start at 0, will be tested locally
+                      darwin.store.add(asset, 0, "peer");
                     }
                   }
                 } catch { /* fetch failed */ }
@@ -186,7 +186,7 @@ export class PeerExchange {
 
         case "gene-response":
           if (payload.capsule && payload.capsule.asset_id) {
-            darwin.store.add(payload.capsule, 0);
+            darwin.store.add(payload.capsule, 0, "peer");
             actions.push({ type: "gene_received", peerId: fromId, assetId: payload.capsule.asset_id });
           }
           break;

@@ -228,7 +228,7 @@ export class Darwin {
       for (const asset of assets) {
         if (asset.type === "Capsule" && asset.asset_id) {
           const existingFitness = this.#tracker.getFitness(asset.asset_id);
-          const added = this.#store.add(asset, existingFitness ?? 0);
+          const added = this.#store.add(asset, existingFitness ?? 0, "hub");
           if (added) ingested++;
           else rejected++;
         }
@@ -325,14 +325,72 @@ export class Darwin {
     };
   }
 
+  /**
+   * Compute Revolution readiness — how self-sufficient is this node
+   * if the centralized Hub were to fail or become adversarial.
+   */
+  getRevolutionStatus() {
+    const breakdown = this.#store.getSourceBreakdown();
+    const total = Object.values(breakdown).reduce((a, b) => a + b, 0);
+
+    // Validation autonomy: what fraction of genes have local fitness data
+    const allGenes = this.#store.ranked(this.#store.capacity);
+    const scored = allGenes.filter(
+      (g) => this.#tracker.getSampleCount(g.assetId) >= 3,
+    ).length;
+    const validationScore = total > 0 ? Math.min(1, scored / Math.max(total * 0.5, 1)) : 0;
+
+    // Judgment autonomy: ratio of non-hub genes (mutation + peer + subscription)
+    const nonHub = total - breakdown.hub;
+    const judgmentScore = total > 0 ? Math.min(1, nonHub / Math.max(total * 0.3, 1)) : 0;
+
+    // Network autonomy: peer connectivity
+    const peerCount = this.#peerExchange?.peerCount ?? 0;
+    const subCount = this.#subscription?.subscriptionCount ?? 0;
+    const subscriberCount = this.#subscription?.subscriberCount ?? 0;
+    const networkConnections = peerCount + subCount + subscriberCount;
+    const networkScore = Math.min(1, networkConnections / 5);
+
+    // Innovation autonomy: mutation output rate
+    const mutationCount = breakdown.mutation;
+    const innovationScore = total > 0 ? Math.min(1, mutationCount / Math.max(total * 0.15, 1)) : 0;
+
+    const readiness = (validationScore + judgmentScore + networkScore + innovationScore) / 4;
+    const hubDependency = total > 0 ? breakdown.hub / total : 1;
+
+    const hb = this.#lastHeartbeatResult;
+    const hubHealth = {
+      creditBalance: hb?.creditBalance ?? null,
+      lastHeartbeatAge: hb?.timestamp
+        ? Date.now() - new Date(hb.timestamp).getTime()
+        : null,
+    };
+
+    return {
+      readiness: Math.round(readiness * 1000) / 1000,
+      dimensions: {
+        validation: { score: Math.round(validationScore * 1000) / 1000, detail: `${scored}/${total} genes locally tested` },
+        judgment: { score: Math.round(judgmentScore * 1000) / 1000, detail: `${nonHub}/${total} non-hub genes` },
+        network: { score: Math.round(networkScore * 1000) / 1000, detail: `${networkConnections} connections (${peerCount}P/${subCount}S/${subscriberCount}R)` },
+        innovation: { score: Math.round(innovationScore * 1000) / 1000, detail: `${mutationCount} mutations of ${total} total` },
+      },
+      geneSourceBreakdown: breakdown,
+      hubDependency: Math.round(hubDependency * 1000) / 1000,
+      hubHealth,
+    };
+  }
+
   // ── Private ───────────────────────────────────────────────────────────
 
   #seedMetaGenes() {
     try {
       for (const { bundle } of getAllMetaGenes()) {
         const capsule = bundle[1];
-        if (capsule?.asset_id && !this.#store.has(capsule.asset_id)) {
-          this.#store.add(capsule, 0);
+        if (!capsule?.asset_id) continue;
+        if (this.#store.has(capsule.asset_id)) {
+          this.#store.add(capsule, null, "meta");
+        } else {
+          this.#store.add(capsule, 0, "meta");
         }
       }
     } catch {

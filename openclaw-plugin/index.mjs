@@ -177,6 +177,16 @@ async function getDarwin(pluginCfg) {
   darwinInstance.on("bootstrap", (data) => {
     pushEvent("bootstrap", `Bootstrap evaluated ${data.evaluated} capsule(s), avg score: ${data.avgScore}`);
   });
+  darwinInstance.on("low-credit", (data) => {
+    pushEvent("low-credit", `Low credits (${data.creditBalance}) — skipping Hub fetch to conserve resources`);
+  });
+  darwinInstance.on("report", (data) => {
+    pushEvent("report", `Reported fitness for ${data.capsuleId?.slice(0, 16)}... (fitness=${data.fitness?.toFixed(3)}, samples=${data.samples})`);
+  });
+  darwinInstance.on("pending-event", (data) => {
+    const type = data.type || data.event_type || "unknown";
+    pushEvent("pending-event", `Hub event: ${type}`);
+  });
 
   darwinInstance.setAgentCallback(async () => {
     pushEvent("evolve-think", "Agent-driven evolution cycle — darwin_think available");
@@ -931,6 +941,7 @@ export default function register(api) {
         sendJson(res, 200, ranked.map((g) => ({
           assetId: g.assetId,
           fitness: g.fitness,
+          source: g.source || "hub",
           summary: g.capsule?.summary,
           triggers: g.capsule?.trigger,
         })));
@@ -1003,6 +1014,20 @@ export default function register(api) {
           peerGraph: sub.graph.getStats(),
           trustPolicy: sub.policy.getStats(),
         } : { peerGraph: null, trustPolicy: null });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/revolution`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        sendJson(res, 200, darwin.getRevolutionStatus());
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }

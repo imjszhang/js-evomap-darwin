@@ -68,7 +68,7 @@ export class Mutator {
     const variants = this.mutate(target.capsule);
 
     for (const variant of variants) {
-      darwin.store.add(variant, target.fitness * 0.9); // start slightly below parent
+      darwin.store.add(variant, target.fitness * 0.9, "mutation");
     }
   }
 

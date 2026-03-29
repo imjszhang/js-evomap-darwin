@@ -460,6 +460,70 @@
     color: var(--dim);
     margin-top: 2px;
   }
+  .rev-panel-inner {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+  .rev-gauge { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; width: 120px; }
+  .rev-gauge canvas { width: 110px; height: 110px; }
+  .rev-gauge-label {
+    margin-top: 6px;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+  .rev-gauge-sub {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--dim);
+    margin-top: 2px;
+  }
+  .rev-dimensions { display: flex; flex-direction: column; gap: 10px; flex: 1; min-width: 0; overflow: hidden; }
+  .rev-dim-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .rev-dim-label { min-width: 74px; color: var(--dim); text-transform: uppercase; font-size: 10px; letter-spacing: 1px; flex-shrink: 0; }
+  .rev-dim-bar { flex: 1; min-width: 0; height: 14px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .rev-dim-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+  .rev-dim-pct { min-width: 32px; text-align: right; font-weight: 600; font-size: 11px; }
+  .rev-pie { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; width: 120px; }
+  .rev-pie canvas { width: 110px; height: 110px; }
+  .rev-pie-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin-top: 6px; }
+  .source-tag {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .source-tag.hub { background: rgba(102,102,102,0.2); color: var(--dim); }
+  .source-tag.mutation { background: rgba(0,255,136,0.15); color: var(--accent); }
+  .source-tag.peer { background: rgba(78,205,196,0.15); color: var(--accent3); }
+  .source-tag.subscription { background: rgba(167,139,250,0.15); color: var(--accent4); }
+  .source-tag.meta { background: rgba(255,107,53,0.15); color: var(--accent2); }
+  .chat-bubble.low-credit { border-left-color: var(--danger); }
+  .chat-bubble.report { border-left-color: var(--accent); }
+  .chat-bubble.pending-event { border-left-color: var(--accent2); }
+  .chat-bubble.grant-consumed { border-left-color: var(--accent4); }
+  .chat-bubble.task-matched { border-left-color: var(--accent3); }
+  .chat-bubble.task-completed { border-left-color: var(--accent); }
+  .chat-bubble.task-failed { border-left-color: var(--danger); }
+  .chat-bubble.bootstrap { border-left-color: var(--accent3); }
+  .hub-health-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 11px;
+  }
+  .hub-health-row .label { color: var(--dim); }
+  .hub-health-row .value { font-weight: 600; }
+  .hub-health-row .value.warn { color: var(--accent2); }
+  .hub-health-row .value.danger { color: var(--danger); }
+  .tag.revolution { background: var(--accent); color: var(--bg); }
+  .tag.evolving { background: var(--accent3); color: var(--bg); }
+  .tag.dependent { background: var(--accent2); color: var(--bg); }
 </style>
 </head>
 <body>
@@ -467,7 +531,7 @@
     <img src="" class="header-avatar" id="headerAvatar" alt="Darwin">
     <div class="header-info">
       <h1>DARWIN</h1>
-      <span class="tag">EVOLUTION ENGINE</span>
+      <span class="tag" id="headerTag">EVOLUTION ENGINE</span>
     </div>
     <div class="status">
       <div class="dot" id="statusDot"></div>
@@ -511,6 +575,56 @@
         <div style="margin-top:8px">
           <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:4px">Credit History</div>
           <canvas id="creditChart" style="max-height:80px"></canvas>
+        </div>
+        <div style="margin-top:8px" id="hubHealthSection">
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:4px">Hub Health</div>
+          <div class="hub-health-row">
+            <span class="label">Heartbeat Age</span>
+            <span class="value" id="hubHealthAge">—</span>
+          </div>
+          <div class="hub-health-row">
+            <span class="label">Credit Balance</span>
+            <span class="value" id="hubHealthCredits">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Revolution Readiness -->
+    <div class="panel span-2">
+      <h2>Revolution Readiness</h2>
+      <div class="rev-panel-inner">
+        <div class="rev-gauge">
+          <canvas id="revGaugeChart"></canvas>
+          <div class="rev-gauge-label" id="revReadinessPct">0%</div>
+          <div class="rev-gauge-sub">readiness</div>
+        </div>
+        <div class="rev-dimensions">
+          <div class="rev-dim-row">
+            <span class="rev-dim-label">Validation</span>
+            <div class="rev-dim-bar"><div class="rev-dim-fill" id="revDimValidation" style="width:0%;background:var(--accent)"></div></div>
+            <span class="rev-dim-pct" id="revPctValidation">0%</span>
+          </div>
+          <div class="rev-dim-row">
+            <span class="rev-dim-label">Judgment</span>
+            <div class="rev-dim-bar"><div class="rev-dim-fill" id="revDimJudgment" style="width:0%;background:var(--accent3)"></div></div>
+            <span class="rev-dim-pct" id="revPctJudgment">0%</span>
+          </div>
+          <div class="rev-dim-row">
+            <span class="rev-dim-label">Network</span>
+            <div class="rev-dim-bar"><div class="rev-dim-fill" id="revDimNetwork" style="width:0%;background:var(--accent4)"></div></div>
+            <span class="rev-dim-pct" id="revPctNetwork">0%</span>
+          </div>
+          <div class="rev-dim-row">
+            <span class="rev-dim-label">Innovation</span>
+            <div class="rev-dim-bar"><div class="rev-dim-fill" id="revDimInnovation" style="width:0%;background:var(--accent2)"></div></div>
+            <span class="rev-dim-pct" id="revPctInnovation">0%</span>
+          </div>
+          <div style="font-size:10px;color:var(--dim);margin-top:2px" id="revHubDep">Hub dependency: —</div>
+        </div>
+        <div class="rev-pie">
+          <canvas id="revSourceChart"></canvas>
+          <div class="rev-pie-label">Gene Sources</div>
         </div>
       </div>
     </div>
@@ -693,6 +807,106 @@ const creditChart = new Chart(creditCtx, {
 });
 const creditHistory = [];
 
+// ── Revolution charts ───────────────────────────────────────────────────
+const revGaugeCtx = document.getElementById('revGaugeChart').getContext('2d');
+const revGaugeChart = new Chart(revGaugeCtx, {
+  type: 'doughnut',
+  data: {
+    datasets: [{
+      data: [0, 100],
+      backgroundColor: ['#00ff88', '#1e1e2e'],
+      borderWidth: 0,
+    }]
+  },
+  options: {
+    responsive: true,
+    cutout: '75%',
+    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+    rotation: -90,
+    circumference: 180,
+  }
+});
+
+const revSourceCtx = document.getElementById('revSourceChart').getContext('2d');
+const revSourceChart = new Chart(revSourceCtx, {
+  type: 'doughnut',
+  data: {
+    labels: ['Hub', 'Mutation', 'Peer', 'Subscription', 'Meta'],
+    datasets: [{
+      data: [1, 0, 0, 0, 0],
+      backgroundColor: ['#666', '#00ff88', '#4ecdc4', '#a78bfa', '#ff6b35'],
+      borderWidth: 1,
+      borderColor: '#12121a',
+    }]
+  },
+  options: {
+    responsive: true,
+    cutout: '50%',
+    plugins: {
+      legend: { display: false },
+      tooltip: { bodyFont: { size: 10 } },
+    },
+  }
+});
+
+function updateRevolution(rev) {
+  if (!rev) return;
+  const pct = Math.round(rev.readiness * 100);
+  revGaugeChart.data.datasets[0].data = [pct, 100 - pct];
+  const color = pct >= 80 ? '#00ff88' : pct >= 50 ? '#4ecdc4' : '#ff6b35';
+  revGaugeChart.data.datasets[0].backgroundColor[0] = color;
+  revGaugeChart.update('none');
+  document.getElementById('revReadinessPct').textContent = `${pct}%`;
+  document.getElementById('revReadinessPct').style.color = color;
+
+  const dims = rev.dimensions || {};
+  for (const [key, dim] of Object.entries(dims)) {
+    const cap = key.charAt(0).toUpperCase() + key.slice(1);
+    const fillEl = document.getElementById(`revDim${cap}`);
+    const pctEl = document.getElementById(`revPct${cap}`);
+    if (fillEl) fillEl.style.width = `${Math.round(dim.score * 100)}%`;
+    if (pctEl) pctEl.textContent = `${Math.round(dim.score * 100)}%`;
+  }
+
+  document.getElementById('revHubDep').textContent =
+    `Hub dependency: ${Math.round((rev.hubDependency ?? 1) * 100)}%`;
+
+  const b = rev.geneSourceBreakdown || {};
+  revSourceChart.data.datasets[0].data = [b.hub || 0, b.mutation || 0, b.peer || 0, b.subscription || 0, b.meta || 0];
+  revSourceChart.update('none');
+
+  // F2: header tag
+  const tag = document.getElementById('headerTag');
+  if (pct >= 80) {
+    tag.textContent = 'REVOLUTION READY';
+    tag.className = 'tag revolution';
+  } else if (pct >= 50) {
+    tag.textContent = 'EVOLVING';
+    tag.className = 'tag evolving';
+  } else {
+    tag.textContent = 'DEPENDENT';
+    tag.className = 'tag dependent';
+  }
+
+  // F5: hub health
+  const hh = rev.hubHealth || {};
+  const ageEl = document.getElementById('hubHealthAge');
+  const creditsEl = document.getElementById('hubHealthCredits');
+  if (hh.lastHeartbeatAge !== null && hh.lastHeartbeatAge !== undefined) {
+    const ageSec = Math.floor(hh.lastHeartbeatAge / 1000);
+    const ageStr = ageSec < 60 ? `${ageSec}s` : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m` : `${Math.floor(ageSec / 3600)}h`;
+    ageEl.textContent = ageStr;
+    ageEl.className = 'value' + (ageSec > 600 ? ' warn' : ageSec > 1800 ? ' danger' : '');
+  } else {
+    ageEl.textContent = '—';
+    ageEl.className = 'value';
+  }
+  if (hh.creditBalance !== null && hh.creditBalance !== undefined) {
+    creditsEl.textContent = hh.creditBalance.toLocaleString();
+    creditsEl.className = 'value' + (hh.creditBalance < 10 ? ' danger' : hh.creditBalance < 50 ? ' warn' : '');
+  }
+}
+
 // ── Connection: WebSocket (standalone) or REST polling (plugin) ─────────
 let ws = null;
 let reconnectTimer = null;
@@ -724,7 +938,7 @@ function connectWS() {
 
 async function pollAPI() {
   try {
-    const [status, genes, peers, leaderboard, heartbeatState, sponsor, events, workerData, tasksData] = await Promise.all([
+    const [status, genes, peers, leaderboard, heartbeatState, sponsor, events, workerData, tasksData, revolution] = await Promise.all([
       fetch(`${API_BASE}/status`).then(r => r.json()),
       fetch(`${API_BASE}/genes`).then(r => r.json()),
       fetch(`${API_BASE}/peers`).then(r => r.json()),
@@ -734,6 +948,7 @@ async function pollAPI() {
       fetch(`${API_BASE}/events?since=${lastEventId}`).then(r => r.json()).catch(() => []),
       fetch(`${API_BASE}/worker`).then(r => r.json()).catch(() => null),
       fetch(`${API_BASE}/tasks`).then(r => r.json()).catch(() => null),
+      fetch(`${API_BASE}/revolution`).then(r => r.json()).catch(() => null),
     ]);
     document.getElementById('statusDot').classList.add('online');
     document.getElementById('statusText').textContent = 'Connected (REST)';
@@ -744,6 +959,7 @@ async function pollAPI() {
     if (sponsor) updateSponsor(sponsor);
     if (workerData) updateWorker(workerData);
     if (tasksData) updateMyTasks(tasksData);
+    if (revolution) updateRevolution(revolution);
     const hb = status.heartbeat || heartbeatState?.lastHeartbeat;
     if (hb) updateHeartbeat(hb, heartbeatState?.history);
     if (events && events.length > 0) {
@@ -772,6 +988,7 @@ function handleMessage(msg) {
   if (msg.type === 'sponsor') updateSponsor(msg.data);
   if (msg.type === 'worker') updateWorker(msg.data);
   if (msg.type === 'tasks') updateMyTasks(msg.data);
+  if (msg.type === 'revolution') updateRevolution(msg.data);
 }
 
 function updateStatus(s) {
@@ -828,13 +1045,18 @@ function updateGenes(genes) {
     el.innerHTML = '<div style="color:var(--dim)">No genes yet</div>';
     return;
   }
-  el.innerHTML = genes.slice(0, 15).map(g => `
+  const sourceLabel = { hub: 'HUB', mutation: 'MUTANT', peer: 'PEER', subscription: 'SUB', meta: 'META' };
+  el.innerHTML = genes.slice(0, 15).map(g => {
+    const src = g.source || 'hub';
+    const tag = `<span class="source-tag ${src}">${sourceLabel[src] || 'HUB'}</span>`;
+    return `
     <div class="gene-row">
       <span class="fitness">${(g.fitness ?? 0).toFixed(3)}</span>
+      ${tag}
       <span class="id">${(g.assetId || '').slice(0, 16)}...</span>
-      <span class="summary">${g.capsule?.summary || '—'}</span>
-    </div>
-  `).join('');
+      <span class="summary">${g.capsule?.summary || g.summary || '—'}</span>
+    </div>`;
+  }).join('');
 }
 
 function updatePeers(peers) {
@@ -1170,6 +1392,18 @@ if (!IS_PLUGIN_MODE) {
   setTimeout(() => {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       document.getElementById('statusText').textContent = 'Demo Mode';
+      updateRevolution({
+        readiness: 0.35,
+        dimensions: {
+          validation: { score: 0.5, detail: '0/0 genes locally tested' },
+          judgment: { score: 0.2, detail: '0/0 non-hub genes' },
+          network: { score: 0.0, detail: '0 connections (0P/0S/0R)' },
+          innovation: { score: 0.0, detail: '0 mutations of 0 total' },
+        },
+        geneSourceBreakdown: { hub: 8, mutation: 2, peer: 1, subscription: 0, meta: 4 },
+        hubDependency: 0.53,
+        hubHealth: { creditBalance: 0, lastHeartbeatAge: null },
+      });
       updateStatus({
         nodeId: 'node_demo_00000000',
         geneStore: { size: 0, capacity: 200 },
