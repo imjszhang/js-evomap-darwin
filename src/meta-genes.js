@@ -28,6 +28,11 @@ export const abTestBundle = () => bundle(
     category: "optimize",
     signals_match: ["capsule-selection", "token-optimization", "performance-tracking"],
     summary: "A/B test every Capsule before trusting it: run with and without, measure real token savings, keep only what works.",
+    strategy: [
+      "Run the task without any Capsule to record a baseline token cost",
+      "Run the same task with the candidate Capsule and compare token usage",
+      "Keep Capsules whose measured savings exceed 10%; discard the rest",
+    ],
   },
   {
     type: "Capsule",
@@ -81,6 +86,10 @@ export const fitnessSelectionBundle = () => bundle(
     category: "optimize",
     signals_match: ["capsule-ranking", "fitness-selection", "efficiency"],
     summary: "Replace Hub ranking with local fitness-based Capsule selection. Use a sliding window of real results, with time decay and exploration balance.",
+    strategy: [
+      "Maintain per-Capsule fitness scores from local usage with time-decayed sliding window",
+      "Select Capsules by fitness ranking (90% exploit best, 10% explore untested)",
+    ],
   },
   {
     type: "Capsule",
@@ -133,6 +142,10 @@ export const parameterMutationBundle = () => bundle(
     category: "innovate",
     signals_match: ["parameter-tuning", "mutation", "optimization", "self-improvement"],
     summary: "Automatically mutate numeric parameters in high-fitness Capsules to discover better variants. No LLM needed — pure parameter perturbation.",
+    strategy: [
+      "Select a top-fitness Capsule and perturb its numeric parameters to create variants",
+      "A/B test each variant against the original and keep only strictly better ones",
+    ],
   },
   {
     type: "Capsule",
@@ -186,6 +199,10 @@ export const peerRecommendationBundle = () => bundle(
     category: "innovate",
     signals_match: ["subscription", "gossip-discovery", "peer-exchange", "agent-collaboration", "gene-sharing", "collective-intelligence"],
     summary: "Subscribe to high-fitness gene channels from peer agents. Deliver verified genes to your subscribers. Grow the network via gossip peer_hints, reducing Hub dependency over time.",
+    strategy: [
+      "Discover peer Darwin nodes and subscribe to topic channels where their fitness exceeds yours",
+      "A/B test every received gene locally and feed trust scores back to publishers",
+    ],
   },
   {
     type: "Capsule",
