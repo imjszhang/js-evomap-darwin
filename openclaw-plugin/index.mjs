@@ -1215,6 +1215,46 @@ export default function register(api) {
   });
 
   api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/published`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const { getAllMetaGenes } = await import(
+          pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "meta-genes.js")).href
+        );
+        const metaGenes = getAllMetaGenes();
+        const hubBase = darwin.hub.hubUrl || "https://evomap.ai";
+
+        const results = await Promise.all(
+          metaGenes.map(async ({ name, bundle }) => {
+            const [gene, capsule, event] = bundle;
+            const entry = {
+              name,
+              gene: { assetId: gene.asset_id, summary: gene.summary },
+              capsule: { assetId: capsule.asset_id, summary: capsule.summary },
+              event: { assetId: event.asset_id },
+              hubStatus: "unknown",
+              hubUrl: `${hubBase}/a2a/assets/${encodeURIComponent(capsule.asset_id)}`,
+            };
+            try {
+              const info = await darwin.hub.getAsset(capsule.asset_id);
+              entry.hubStatus = info?.status || info?.payload?.status || "published";
+            } catch {
+              // Hub unreachable — keep "unknown"
+            }
+            return entry;
+          }),
+        );
+        sendJson(res, 200, results);
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
     path: `${ROUTE_PREFIX}/`,
     auth: "plugin",
     match: "prefix",

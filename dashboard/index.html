@@ -503,6 +503,81 @@
   .source-tag.peer { background: rgba(78,205,196,0.15); color: var(--accent3); }
   .source-tag.subscription { background: rgba(167,139,250,0.15); color: var(--accent4); }
   .source-tag.meta { background: rgba(255,107,53,0.15); color: var(--accent2); }
+  .pub-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .pub-card {
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .pub-card .pub-name {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .pub-card .pub-ids {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-bottom: 6px;
+  }
+  .pub-card .pub-id-row {
+    display: flex;
+    gap: 6px;
+    font-size: 10px;
+    color: var(--dim);
+  }
+  .pub-card .pub-id-row .pub-type {
+    min-width: 50px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+  }
+  .pub-card .pub-id-row .pub-hash {
+    font-family: inherit;
+    opacity: 0.7;
+  }
+  .pub-card .pub-summary {
+    font-size: 11px;
+    color: var(--dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 6px;
+  }
+  .pub-card .pub-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .pub-status {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .pub-status.published { background: rgba(0,255,136,0.15); color: var(--accent); }
+  .pub-status.candidate { background: rgba(78,205,196,0.15); color: var(--accent3); }
+  .pub-status.promoted { background: rgba(167,139,250,0.15); color: var(--accent4); }
+  .pub-status.unknown { background: rgba(102,102,102,0.2); color: var(--dim); }
+  .pub-link {
+    font-size: 10px;
+    color: var(--accent3);
+    text-decoration: none;
+    opacity: 0.8;
+    transition: opacity 0.2s;
+  }
+  .pub-link:hover { opacity: 1; text-decoration: underline; }
   .chat-bubble.low-credit { border-left-color: var(--danger); }
   .chat-bubble.report { border-left-color: var(--accent); }
   .chat-bubble.pending-event { border-left-color: var(--accent2); }
@@ -676,6 +751,14 @@
       <h2>Token Savings</h2>
       <div id="tokenEmpty" style="color:var(--dim)">No token usage data yet</div>
       <canvas id="tokenChart" style="display:none"></canvas>
+    </div>
+
+    <!-- Published Meta-Genes -->
+    <div class="panel span-2">
+      <h2>Published Meta-Genes</h2>
+      <div id="publishedPanel">
+        <div style="color:var(--dim)">No publication data yet</div>
+      </div>
     </div>
 
     <!-- Row 6: Worker -->
@@ -938,7 +1021,7 @@ function connectWS() {
 
 async function pollAPI() {
   try {
-    const [status, genes, peers, leaderboard, heartbeatState, sponsor, events, workerData, tasksData, revolution] = await Promise.all([
+    const [status, genes, peers, leaderboard, heartbeatState, sponsor, events, workerData, tasksData, revolution, published] = await Promise.all([
       fetch(`${API_BASE}/status`).then(r => r.json()),
       fetch(`${API_BASE}/genes`).then(r => r.json()),
       fetch(`${API_BASE}/peers`).then(r => r.json()),
@@ -949,6 +1032,7 @@ async function pollAPI() {
       fetch(`${API_BASE}/worker`).then(r => r.json()).catch(() => null),
       fetch(`${API_BASE}/tasks`).then(r => r.json()).catch(() => null),
       fetch(`${API_BASE}/revolution`).then(r => r.json()).catch(() => null),
+      fetch(`${API_BASE}/published`).then(r => r.json()).catch(() => null),
     ]);
     document.getElementById('statusDot').classList.add('online');
     document.getElementById('statusText').textContent = 'Connected (REST)';
@@ -960,6 +1044,7 @@ async function pollAPI() {
     if (workerData) updateWorker(workerData);
     if (tasksData) updateMyTasks(tasksData);
     if (revolution) updateRevolution(revolution);
+    if (published) updatePublished(published);
     const hb = status.heartbeat || heartbeatState?.lastHeartbeat;
     if (hb) updateHeartbeat(hb, heartbeatState?.history);
     if (events && events.length > 0) {
@@ -989,6 +1074,7 @@ function handleMessage(msg) {
   if (msg.type === 'worker') updateWorker(msg.data);
   if (msg.type === 'tasks') updateMyTasks(msg.data);
   if (msg.type === 'revolution') updateRevolution(msg.data);
+  if (msg.type === 'published') updatePublished(msg.data);
 }
 
 function updateStatus(s) {
@@ -1316,6 +1402,33 @@ function updateTopicClimate(climate) {
   }
 
   el.innerHTML = html || '<div style="color:var(--dim)">No climate data</div>';
+}
+
+function updatePublished(data) {
+  const el = document.getElementById('publishedPanel');
+  if (!data || data.length === 0) {
+    el.innerHTML = '<div style="color:var(--dim)">No publication data yet</div>';
+    return;
+  }
+  el.innerHTML = `<div class="pub-grid">${data.map(m => {
+    const status = (m.hubStatus || 'unknown').toLowerCase();
+    const shortId = (id) => id ? id.slice(0, 24) + '...' : '—';
+    return `<div class="pub-card">
+      <div class="pub-name">
+        <span>${m.name}</span>
+        <span class="pub-status ${status}">${status}</span>
+      </div>
+      <div class="pub-summary" title="${(m.capsule?.summary || '').replace(/"/g, '&quot;')}">${m.capsule?.summary || '—'}</div>
+      <div class="pub-ids">
+        <div class="pub-id-row"><span class="pub-type">Gene</span><span class="pub-hash">${shortId(m.gene?.assetId)}</span></div>
+        <div class="pub-id-row"><span class="pub-type">Capsule</span><span class="pub-hash">${shortId(m.capsule?.assetId)}</span></div>
+        <div class="pub-id-row"><span class="pub-type">Event</span><span class="pub-hash">${shortId(m.event?.assetId)}</span></div>
+      </div>
+      <div class="pub-footer">
+        ${m.hubUrl ? `<a class="pub-link" href="${m.hubUrl}" target="_blank" rel="noopener">View on Hub &#8599;</a>` : ''}
+      </div>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 function updateWorker(data) {

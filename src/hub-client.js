@@ -263,6 +263,10 @@ export class HubClient {
 
   // ── Asset Discovery ──────────────────────────────────────────────────
 
+  async getAsset(assetId) {
+    return this.#get(`/a2a/assets/${encodeURIComponent(assetId)}`);
+  }
+
   async getPromotedAssets() {
     return this.#get("/a2a/assets?status=promoted");
   }
