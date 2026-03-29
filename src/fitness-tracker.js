@@ -4,6 +4,8 @@ import { join } from "node:path";
 const WINDOW_SIZE = 20;
 const MIN_SAMPLES = 3;
 const HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const REPORT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
+const REPORT_MIN_SAMPLES = 5;
 
 /**
  * Tracks real-world effectiveness of Capsules via sliding-window fitness scoring.
@@ -12,11 +14,13 @@ const HALF_LIFE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 export class FitnessTracker {
   #logPath;
   #records; // capsuleId -> Record[]
+  #reportedAt; // capsuleId -> timestamp (ms) of last Hub report
 
   constructor({ dataDir = "./data" } = {}) {
     mkdirSync(dataDir, { recursive: true });
     this.#logPath = join(dataDir, "fitness-log.jsonl");
     this.#records = new Map();
+    this.#reportedAt = new Map();
     this.#load();
   }
 
@@ -233,6 +237,21 @@ export class FitnessTracker {
    */
   getRecords(capsuleId) {
     return this.#records.get(capsuleId) || [];
+  }
+
+  /**
+   * Check if a Capsule is eligible for a Hub report submission:
+   * must have enough samples and not have been reported in the last 24 hours.
+   */
+  canReport(capsuleId) {
+    if (this.getSampleCount(capsuleId) < REPORT_MIN_SAMPLES) return false;
+    const lastReport = this.#reportedAt.get(capsuleId);
+    if (!lastReport) return true;
+    return Date.now() - lastReport >= REPORT_COOLDOWN_MS;
+  }
+
+  markReported(capsuleId) {
+    this.#reportedAt.set(capsuleId, Date.now());
   }
 
   // ── Private ───────────────────────────────────────────────────────────

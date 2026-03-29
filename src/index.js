@@ -19,7 +19,7 @@ export { Subscription } from "./subscription.js";
 export { TrustPolicy } from "./trust-policy.js";
 export { PeerGraph } from "./peer-graph.js";
 
-const DEFAULT_HEARTBEAT_MS = 900_000; // 15 min
+const DEFAULT_HEARTBEAT_MS = 300_000; // 5 min (EvoMap official recommendation)
 const DEFAULT_EVOLVE_MS = 4 * 60 * 60 * 1000; // 4 hours
 const MAX_INGEST_PER_CYCLE = 10;
 const CAPACITY_CAUTIOUS_RATIO = 0.9;
@@ -49,6 +49,7 @@ export class Darwin {
   #running = false;
   #eventHandlers = new Map();
   #lastHeartbeatResult = null;
+  #nextHeartbeatMs;
 
   constructor({
     hubUrl,
@@ -82,6 +83,8 @@ export class Darwin {
     this.#subscription = null;
     this.#sponsor = null;
     this.#taskMatcher = null;
+
+    this.#seedMetaGenes();
   }
 
   get hub() { return this.#hub; }
@@ -159,30 +162,27 @@ export class Darwin {
     if (this.#running) return;
     this.#running = true;
 
-    const hbInterval = heartbeatMs || DEFAULT_HEARTBEAT_MS;
+    this.#nextHeartbeatMs = heartbeatMs || DEFAULT_HEARTBEAT_MS;
     const evInterval = evolveMs || DEFAULT_EVOLVE_MS;
-
-    // Seed meta-genes so they're available via selectCapsule
-    this.#seedMetaGenes();
 
     // Bootstrap: seed structural fitness scores when gene pool has no real data
     this.#runBootstrap();
 
     // Initial heartbeat
     await this.#doHeartbeat();
+    this.#scheduleNextHeartbeat();
 
-    this.#heartbeatTimer = setInterval(() => this.#doHeartbeat(), hbInterval);
     this.#evolveTimer = setInterval(() => this.#doEvolveCycle(), evInterval);
 
     // Run first evolve cycle immediately
     await this.#doEvolveCycle();
 
-    this.#emit("start", { heartbeatMs: hbInterval, evolveMs: evInterval });
+    this.#emit("start", { heartbeatMs: this.#nextHeartbeatMs, evolveMs: evInterval });
   }
 
   stop() {
     this.#running = false;
-    if (this.#heartbeatTimer) clearInterval(this.#heartbeatTimer);
+    if (this.#heartbeatTimer) clearTimeout(this.#heartbeatTimer);
     if (this.#evolveTimer) clearInterval(this.#evolveTimer);
     this.#heartbeatTimer = null;
     this.#evolveTimer = null;
@@ -259,6 +259,25 @@ export class Darwin {
       this.#store.updateFitness(capsuleId, fitness);
     }
     this.#emit("record", { capsuleId, taskType, fitness, ...result });
+
+    // Submit validation report to Hub when enough data has accumulated
+    const samples = this.#tracker.getSampleCount(capsuleId);
+    if (samples >= 5 && fitness !== null && this.#tracker.canReport(capsuleId)) {
+      const records = this.#tracker.getRecords(capsuleId);
+      const successCount = records.filter((r) => r.success).length;
+      this.#hub.report(capsuleId, {
+        fitness,
+        samples,
+        success_rate: Math.round((successCount / records.length) * 1000) / 1000,
+        token_savings: entry.baseline_tokens > 0
+          ? Math.round((1 - entry.tokens_used / entry.baseline_tokens) * 1000) / 1000
+          : 0,
+      }).then(() => {
+        this.#tracker.markReported(capsuleId);
+        this.#emit("report", { capsuleId, fitness, samples });
+      }).catch(() => {});
+    }
+
     return { entry, fitness };
   }
 
@@ -344,11 +363,41 @@ export class Darwin {
     try {
       const res = await this.#hub.heartbeat();
       this.#lastHeartbeatResult = res;
+      if (res.nextHeartbeatMs && res.nextHeartbeatMs > 0) {
+        this.#nextHeartbeatMs = res.nextHeartbeatMs;
+      }
+      this.#processPendingEvents(res.pendingEvents);
       this.#emit("heartbeat", res);
       return res;
     } catch (err) {
       this.#emit("error", { phase: "heartbeat", error: err.message });
     }
+  }
+
+  #processPendingEvents(events) {
+    if (!events || events.length === 0) return;
+    for (const event of events) {
+      const type = event.type || event.event_type;
+      if ((type === "task_assigned" || type === "high_value_task") &&
+          this.#taskMatcher && this.#taskMatcher.autoSubmit) {
+        const task = event.task || event;
+        const match = this.#taskMatcher.matchTask(task, this.#store);
+        if (match) {
+          this.#taskMatcher.claimAndComplete(match, this).catch((err) => {
+            this.#emit("error", { phase: "pending-event-task", error: err.message });
+          });
+        }
+      }
+      this.#emit("pending-event", event);
+    }
+  }
+
+  #scheduleNextHeartbeat() {
+    if (!this.#running) return;
+    this.#heartbeatTimer = setTimeout(async () => {
+      await this.#doHeartbeat();
+      this.#scheduleNextHeartbeat();
+    }, this.#nextHeartbeatMs);
   }
 
   #getActiveSignals() {
@@ -365,9 +414,18 @@ export class Darwin {
 
   async #doEvolveCycle() {
     try {
-      // 1. Fetch new capsules (signal-directed when possible)
-      const signals = this.#getActiveSignals();
-      await this.fetchAndIngest(signals.length > 0 ? signals : undefined);
+      // 0. Check credit balance — skip fetch when credits are low
+      const credits = this.#lastHeartbeatResult?.creditBalance;
+      const lowCredit = typeof credits === "number" && credits < 10;
+      if (lowCredit) {
+        this.#emit("low-credit", { creditBalance: credits });
+      }
+
+      // 1. Fetch new capsules (signal-directed when possible; skip when low on credits)
+      if (!lowCredit) {
+        const signals = this.#getActiveSignals();
+        await this.fetchAndIngest(signals.length > 0 ? signals : undefined);
+      }
 
       // 2. Agent-driven evolution (preferred) or fallback to Mutator
       if (this.#agentCallback) {

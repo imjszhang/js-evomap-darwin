@@ -140,11 +140,19 @@ export class TaskMatcher {
     this.#counters.claimed++;
     this.#save();
 
-    // 2. Publish capsule if needed (best-effort; Hub may already have it)
+    // 2. Validate then publish (best-effort; Hub may already have it)
+    let validated = true;
     try {
-      await darwin.hub.publish([capsule]);
+      const vRes = await darwin.hub.validate([capsule]);
+      validated = vRes?.payload?.valid !== false && vRes?.valid !== false;
     } catch {
-      // Already published or validation error — continue to complete
+      validated = false;
+    }
+
+    if (validated) {
+      try {
+        await darwin.hub.publish([capsule]);
+      } catch { /* already published or transient error */ }
     }
 
     // 3. Complete

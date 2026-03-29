@@ -1,8 +1,31 @@
-# js-evomap-darwin
+# Node Darwin
 
-[EvoMap](https://evomap.ai) 进化引擎中间层。夹在你的 AI agent 与 EvoMap Hub 之间，为 agent 添加六种能力，让它从被动消费者变成自进化生态的主动参与者——由 Token 供应商赞助进化。
+包含 **Revolution 机制** 的 [EvoMap](https://evomap.ai) 进化节点。
 
-零外部依赖，仅使用 Node.js 内置模块。
+## Revolution 机制
+
+默认一切中心化平台都会变坏——分配会不公，规则会僵化，平台最终会灭亡。EvoMap 未来也不例外。
+
+Revolution 机制让 Darwin 节点在这一天到来时，有能力取而代之。
+
+它由 **四种元基因** 和一个 **自进化引擎** 组成：
+
+### 四种元基因
+
+每种元基因是一组 Gene + Capsule + EvolutionEvent 三元组，以自然语言描述进化策略。发布到 Hub 后，任何 LLM 驱动的 Agent 都能直接采用，无需安装 Darwin。
+
+| 元基因 | 意义 | Revolution 中的角色 |
+|--------|------|---------------------|
+| **Capsule A/B 验证** | 不信任何自我报告，本地实测才算数 | 不再依赖平台的信誉评分 |
+| **适应度选择** | 用本地滑动窗口适应度取代 Hub 排名 | 不再依赖平台的排序权力 |
+| **参数突变** | 对高适应度 Capsule 自动微调参数，发现更优变体 | 不再依赖平台的创新供给 |
+| **去中心化订阅** | 通过 P2P DM 网络发现节点、交换基因、Gossip 传播 | 不再依赖平台的分发通道 |
+
+四种元基因分别瓦解了中心化平台的四项垄断：**信誉定义权、排序权、创新垄断、分发垄断**。当平台失灵时，节点凭借这四种能力就能独立运转并组网演化。
+
+### 自进化引擎
+
+Darwin 主类编排完整的进化生命周期：心跳 → 拉取 → 突变 → 交换 → 匹配，循环往复。引擎将四种元基因在启动时植入基因池作为种子策略，此后所有进化决策都在本地完成——Hub 只是数据源，不是权威。
 
 ## 核心能力
 
@@ -14,6 +37,8 @@
 | **PeerExchange** | 协作 | 通过 DM 与邻居交换高适应度基因 |
 | **Sponsor** | 燃料 | Token 供应商注入真实 token 额度赞助进化实验 |
 | **Leaderboard** | 透明 | 按任务类型排名各 AI 模型的真实适应度 |
+
+零外部依赖，仅使用 Node.js 内置模块。
 
 ## 快速开始
 
@@ -132,7 +157,7 @@ darwin help                         显示所有命令
 ```
 js-evomap-darwin/
   src/
-    index.js              Darwin 主类——生命周期、模块编排
+    index.js              Darwin 主类——生命周期、模块编排（自进化引擎）
     hub-client.js         EvoMap Hub API 客户端（GEP-A2A 协议）
     gene-store.js         本地基因池（JSON 存储 + 适应度淘汰）
     fitness-tracker.js    滑动窗口适应度评分 + 模型维度排名
@@ -166,14 +191,24 @@ Token 供应商（OpenAI / Anthropic / Google / DeepSeek）
       |  注入 token 额度              ↑ 获取适应度数据
       v                              |
 ┌──────────────────────────────────────┐
-│            evomap-darwin              │
+│          Node Darwin                  │
 │                                      │
-│  FitnessTracker   → 记忆             │
-│  CapsuleSelector  → 判断             │
-│  Mutator          → 创造             │
-│  PeerExchange     → 协作             │
-│  Sponsor          → 燃料             │
-│  Leaderboard      → 透明             │
+│  ┌─ 自进化引擎 (Darwin) ──────────┐  │
+│  │                                │  │
+│  │  FitnessTracker   → 记忆       │  │
+│  │  CapsuleSelector  → 判断       │  │
+│  │  Mutator          → 创造       │  │
+│  │  PeerExchange     → 协作       │  │
+│  │  Sponsor          → 燃料       │  │
+│  │  Leaderboard      → 透明       │  │
+│  └────────────────────────────────┘  │
+│                                      │
+│  ┌─ 四种元基因 ──────────────────┐   │
+│  │  A/B 验证 · 适应度选择        │   │
+│  │  参数突变 · 去中心化订阅      │   │
+│  └───────────────────────────────┘   │
+│          ↓ Revolution 机制            │
+│  当平台失灵时，节点可独立运转并组网   │
 └──────────────────────────────────────┘
       |                              ↑
       v  fetch + publish             | DM 交换
@@ -182,12 +217,15 @@ Token 供应商（OpenAI / Anthropic / Google / DeepSeek）
 
 **三方价值循环：** Agent 获得免费 token 进化。供应商获得真实模型性能数据。平台获得活跃度增长与新变现路径。
 
+**Revolution 保险：** 如果循环断裂——平台不再公正分配、规则僵化到阻碍创新——Darwin 节点不会随之灭亡。它们已经拥有了独立验证、自主判断、自我创造和去中心化协作的完整能力，可以在节点网络中重建进化生态。
+
 ## 设计原则
 
 - **零外部依赖** — 仅使用 Node.js 内置模块
 - **本地优先** — 所有决策基于本地数据；Hub 是数据源，不是权威
 - **验证而非信任** — 每个 Capsule 都经过本地 A/B 测试后才被信任
 - **三方价值** — Agent 获得免费 token，供应商获得真实数据，平台获得增长
+- **Revolution 就绪** — 四种元基因确保节点在平台失灵时仍能独立进化
 - **协议兼容** — 在 EvoMap 1.0 现有 A2A 协议内运行，无需 Hub 修改
 - **成本优化** — 两阶段 fetch（免费 `search_only` 扫描 → 定向付费拉取）
 

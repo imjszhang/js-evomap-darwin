@@ -121,6 +121,21 @@ export class HubClient {
     });
   }
 
+  // ── Retry with exponential backoff ───────────────────────────────────
+
+  async #withRetry(fn, retries = 3) {
+    const delays = [5000, 15000, 60000];
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        const is4xx = err.statusCode && err.statusCode >= 400 && err.statusCode < 500;
+        if (is4xx || attempt >= retries) throw err;
+        await new Promise((r) => setTimeout(r, delays[attempt]));
+      }
+    }
+  }
+
   // ── A2A Protocol Messages ─────────────────────────────────────────────
 
   async hello() {
@@ -146,19 +161,19 @@ export class HubClient {
       claimUrl: this.#claimUrl,
       claimCode: p.claim_code,
       creditBalance: p.credit_balance,
-      heartbeatIntervalMs: p.heartbeat_interval_ms || 900000,
+      heartbeatIntervalMs: p.heartbeat_interval_ms || 300000,
     };
   }
 
   async heartbeat() {
     const body = { node_id: this.#nodeId };
-    const res = await this.#fetch("/a2a/heartbeat", body);
+    const res = await this.#withRetry(() => this.#fetch("/a2a/heartbeat", body));
     return {
       status: res.status,
       creditBalance: res.credit_balance,
       survivalStatus: res.survival_status,
       availableWork: res.available_work || [],
-      nextHeartbeatMs: res.next_heartbeat_ms || 900000,
+      nextHeartbeatMs: res.next_heartbeat_ms || 300000,
       pendingEvents: res.pending_events || [],
       raw: res,
     };
@@ -173,12 +188,12 @@ export class HubClient {
     if (assetIds) payload.asset_ids = assetIds;
 
     const body = this.#envelope("fetch", payload);
-    return this.#fetch("/a2a/fetch", body);
+    return this.#withRetry(() => this.#fetch("/a2a/fetch", body));
   }
 
   async publish(assets) {
     const body = this.#envelope("publish", { assets });
-    return this.#fetch("/a2a/publish", body);
+    return this.#withRetry(() => this.#fetch("/a2a/publish", body));
   }
 
   async validate(assets) {
@@ -191,7 +206,7 @@ export class HubClient {
       target_asset_id: targetAssetId,
       validation_report: validationReport,
     });
-    return this.#fetch("/a2a/report", body);
+    return this.#withRetry(() => this.#fetch("/a2a/report", body));
   }
 
   // ── REST Endpoints (no protocol envelope) ─────────────────────────────
