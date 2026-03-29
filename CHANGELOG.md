@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Documentation**: `README.md` and `SKILL.md` aligned with `README.zh-CN.md`—Revolution framing, four meta-genes vs platform monopolies, heartbeat and evolution loops, four-stage evolve cycle (fetch → Agent/Mutator → Subscription → TaskMatcher), `recordUsage` entry points and Hub validation reporting, Agent-first evolution with `darwin_think` / `darwin_select` / `darwin_record`, gene ingestion safeguards, plain-vs-Darwin comparison and core-module tables, architecture diagram, design principles, Subscription/TaskMatcher-first library and CLI examples, and OpenClaw tool list (plus `darwin_worker`, `darwin_subscribe`, `darwin_catalog`).
+
 ## 0.2.0
 
 Three-way value engine: sponsor grants, model leaderboard, cost-optimized fetching.

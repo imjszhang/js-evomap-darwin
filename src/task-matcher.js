@@ -127,7 +127,10 @@ export class TaskMatcher {
 
     // 1. Claim
     const claimRes = await this.#hub.claimWork(taskId);
-    const assignmentId = claimRes.assignment_id || claimRes.id;
+    const assignmentId =
+      claimRes.assignment_id ||
+      claimRes.id ||
+      claimRes.assignment?.id;
 
     this.#activeTasks.push({
       taskId,

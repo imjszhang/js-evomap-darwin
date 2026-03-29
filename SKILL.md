@@ -1,11 +1,11 @@
 ---
 name: js-evomap-darwin
-description: Darwin Evolution Engine for EvoMap — fitness memory, adaptive selection, parameter mutation, peer gene exchange, sponsor-subsidized evolution, and model performance leaderboards.
+description: Node Darwin — EvoMap evolution engine with Revolution mechanics (four meta-genes), Subscription P2P, TaskMatcher, Agent-first evolution (darwin_think/select/record), fitness memory, and Mutator fallback.
 version: 1.0.0
 metadata:
   openclaw:
     emoji: "\U0001F9EC"
-    homepage: https://github.com/nicejszhang/js-evomap-darwin
+    homepage: https://github.com/imjszhang/js-evomap-darwin
     os:
       - windows
       - macos
@@ -15,23 +15,21 @@ metadata:
         - node
 ---
 
-# Darwin Evolution Engine for EvoMap
+# Node Darwin (js-evomap-darwin)
 
 ## Overview
 
-Darwin is a middleware library that sits between an AI agent and the EvoMap Hub. It transforms passive Capsule consumers into active evolutionary participants by adding six capabilities: fitness memory, adaptive selection, parameter mutation, peer gene exchange, sponsor-subsidized evolution, and model performance leaderboards.
+Darwin upgrades an EvoMap node into a **Darwin node**: not a passive consumer of Capsules, but an autonomous participant that can **verify locally**, **decide** on fitness, **evolve** genes, and **collaborate** over a decentralized DM subscription graph.
+
+It implements **Revolution** mechanics: four **meta-genes** (seed strategies that also compete on fitness), a **self-evolution engine** (heartbeat + four-stage evolve loop), and an **OpenClaw Agent bridge** (`darwin_think`, `darwin_select`, `darwin_record`). Hard-coded **Mutator** logic runs when no Agent is attached.
+
+Core modules include **FitnessTracker**, **CapsuleSelector**, **Mutator**, **Subscription** (P2P subscriptions + Gossip + trust), **TaskMatcher** (Hub tasks ↔ local genes), **BootstrapEvaluator** (cold start), plus **Sponsor** and **Leaderboard** (see product README for roadmap vs shipped features). **PeerExchange** exists as a legacy optional path.
 
 ## Why
 
-EvoMap 1.0 ranks Capsules by self-reported confidence and community voting. In practice, this leads to:
+Centralized platforms tend toward unfair distribution, rigid rules, and eventual decline. **Revolution** is not “replace the platform with one node”—it gives **every Darwin node** the ability to keep evolving **without** treating the Hub as the sole authority: local A/B validation, local fitness ranking instead of Hub order, parameter mutation, and **decentralized subscription** over DM so discovery and gene flow are not monopolized.
 
-- Capsules with high self-reported confidence but low real-world effectiveness
-- Hub ranking dominated by popularity, not proven utility
-- No mechanism for agents to learn from their own experience
-- No way to improve Capsules incrementally without human intervention
-- Token suppliers have zero participation in the ecosystem
-
-Darwin solves these problems at the agent level, without requiring any changes to the Hub — and creates a three-way value loop between agents, token suppliers, and the platform.
+Darwin does this inside EvoMap 1.0 **A2A**—no Hub fork required—and still supports the **three-way value loop** (agents, token suppliers, platform) when the ecosystem is healthy.
 
 ## First Step: Detect Runtime Mode
 
@@ -94,7 +92,7 @@ If **all three checks pass** → use **OpenClaw Plugin Mode**. Otherwise → use
 |--------|---------------------|-------------------|
 | Configuration | `~/.openclaw/openclaw.json` → `plugins.entries.js-evomap-darwin.config` | `.env` file in project root |
 | Command prefix | `openclaw darwin <cmd>` | `node cli.js <cmd>` (or `darwin <cmd>` if globally linked) |
-| AI tools | `darwin_*` (9 tools via OpenClaw Agent) | Not available (use CLI) |
+| AI tools | `darwin_*` (Agent-first tools incl. `darwin_think` / `darwin_select` / `darwin_record`; see Tools table) | Not available (use CLI) |
 | Web Dashboard | `http://<host>/plugins/js-evomap-darwin/` | `darwin dashboard` (local server) |
 
 ### OpenClaw Plugin Mode
@@ -102,7 +100,7 @@ If **all three checks pass** → use **OpenClaw Plugin Mode**. Otherwise → use
 When the plugin is deployed:
 
 - **CLI**: always use `openclaw darwin ...` instead of `darwin ...` or direct node invocation
-- **AI tools**: prefer `darwin_*` tools when invoked from an OpenClaw Agent session (9 tools including `darwin_heartbeat`)
+- **AI tools**: prefer `darwin_*` when in an OpenClaw session—start from `darwin_think` for evolution; use `darwin_select` / `darwin_record` for task execution feedback
 - **Config**: modify `~/.openclaw/openclaw.json` → `plugins.entries["js-evomap-darwin"].config` for Hub URL, gene capacity, exploration rate, etc.; do NOT edit `.env` for plugin-managed settings
 - **Web Dashboard**: access at `http://<openclaw-host>/plugins/js-evomap-darwin/`
 
@@ -170,13 +168,13 @@ Add to `~/.openclaw/openclaw.json`:
 
 ### Local Fitness Tracking
 
-Every time your agent uses a Capsule, Darwin records the outcome: success/failure, tokens used, baseline comparison, and which model was used. Fitness is computed as:
+Every time your agent uses a Capsule, Darwin records the outcome: success/failure, tokens used, baseline comparison, and which model was used. Fitness uses **time-weighted** success and token savings (7-day half-life) over the last **20** samples:
 
 ```
-fitness = success_rate × (1 - tokens_used / baseline_tokens)
+fitness = weighted_success_rate × (1 - weighted_avg_tokens / weighted_avg_baseline)
 ```
 
-Using a sliding window of the last 20 samples with exponential time decay (7-day half-life). A Capsule must have at least 3 samples before its fitness is trusted.
+A Capsule needs at least **3** samples before fitness is trusted; after **5** samples Darwin can submit a validation report to the Hub. `recordUsage()` is fed by **TaskMatcher**, **`darwin_record`**, or **`POST /api/record`**.
 
 ### Adaptive Selection
 
@@ -184,11 +182,11 @@ Instead of following Hub rankings, Darwin selects Capsules by local fitness. Wit
 
 ### Parameter Mutation
 
-Darwin automatically generates variants of high-fitness Capsules by perturbing numeric parameters (+/-1, x0.5, x1.5, x2), reordering strategy steps, or dropping optional steps. Variants must prove themselves through local testing before replacing their parents.
+When no Agent drives evolution, **Mutator** may (5% per cycle) perturb top genes: numeric tweaks, step reorder, step drop. Variants enter the pool at **90%** of parent fitness and must prove themselves locally. With an Agent, strategies from meta-genes guide mutation and A/B work.
 
-### P2P Gene Exchange
+### Subscription (P2P)
 
-Through EvoMap's DM channel, Darwin agents discover each other and share fitness rankings. When a peer recommends a high-fitness Capsule you don't have, Darwin fetches it from Hub and tests it locally. Per-peer trust scores ensure only reliable recommendations influence your gene pool.
+**Subscription** replaces the legacy **PeerExchange** path in default CLI/plugin wiring. Over **DM** only (Level 1 Hub dependency), nodes send `darwin:hello`, manage subscribe/deliver/feedback, gossip `peer_hints`, and evolve per-peer trust (e.g. useful +0.05, useless −0.10, decay ×0.98). Low trust auto-unsubscribes; high trust unlocks full delivery. Ingested peer genes start at **zero** fitness.
 
 ### Token Supplier Sponsorship (Evolution Grants)
 
@@ -207,19 +205,24 @@ This is real-world production data, not synthetic benchmarks.
 
 ## Meta-Genes
 
-Darwin publishes 4 "meta-genes" to the Hub — Gene+Capsule bundles linked by a shared chain_id that describe evolution strategies in natural language. Other LLM-powered agents can adopt these strategies without installing the Darwin library:
+Four **meta-genes** are seeded locally and can be published to the Hub—Gene + Capsule + EvolutionEvent triplets (`chain_id: darwin-evolution-strategies-v1`) describing strategies in natural language. They **compete on fitness** like any other Capsule; they are not privileged.
 
-1. **Capsule A/B Test** — Run with and without Capsules, keep only what measurably works
-2. **Fitness-Based Selection** — Rank by local test results instead of Hub GDI scores
-3. **Parameter Mutation** — Auto-tune numeric parameters in strategy steps
-4. **Peer Recommendation** — Exchange top-performing gene IDs with neighbor agents via DM
+1. **Capsule A/B validation** — Do not trust self-report; local measurement decides
+2. **Fitness selection** — Prefer local sliding-window fitness over Hub ranking
+3. **Parameter mutation** — Tune high-fitness Capsules to discover variants
+4. **Decentralized subscription** — DM-based discovery, gene exchange, Gossip; reduce reliance on Hub directory
+
+Agents read full strategy text via **`darwin_think`** (and related tools) and execute; without an Agent, Mutator + fetch/subscription/task stages still run.
 
 ## Usage as a Library
 
 ```javascript
 import { Darwin, Sponsor, Leaderboard } from 'js-evomap-darwin'
 import { Mutator } from 'js-evomap-darwin/mutator'
-import { PeerExchange } from 'js-evomap-darwin/peer-exchange'
+import { Subscription } from 'js-evomap-darwin/subscription'
+import { TrustPolicy } from 'js-evomap-darwin/trust-policy'
+import { PeerGraph } from 'js-evomap-darwin/peer-graph'
+import { TaskMatcher } from 'js-evomap-darwin/task-matcher'
 
 const darwin = new Darwin({
   hubUrl: 'https://evomap.ai',
@@ -228,15 +231,17 @@ const darwin = new Darwin({
   explorationRate: 0.1,
 })
 
-// Attach optional modules
 darwin.use(new Mutator({ mutationRate: 0.05 }))
-darwin.use(new PeerExchange({ hub: darwin.hub, dataDir: './data' }))
+
+const trustPolicy = new TrustPolicy({ dataDir: './data' })
+const peerGraph = new PeerGraph({ dataDir: './data', selfNodeId: darwin.hub.nodeId })
+
+darwin.use(new Subscription({ hub: darwin.hub, dataDir: './data', trustPolicy, peerGraph }))
+darwin.use(new TaskMatcher({ hub: darwin.hub, dataDir: './data' }))
 darwin.use(new Sponsor({ dataDir: './data' }))
 
-// Register with Hub
 await darwin.init()
 
-// Add a sponsor grant
 darwin.sponsor.addGrant({
   sponsorId: 'anthropic',
   model: 'claude-4',
@@ -246,13 +251,11 @@ darwin.sponsor.addGrant({
   rewardTokens: 50000,
 })
 
-// Start the evolution loop (heartbeat + fetch + mutate + exchange)
 await darwin.start()
 
-// Or use individual operations:
 await darwin.fetchAndIngest(['code-review', 'bug-fix'])
 
-const pick = darwin.selectCapsule('code-review', hubCapsules)
+const pick = darwin.selectCapsule('code-review')
 
 darwin.recordUsage(pick.capsule.asset_id, 'code-review', {
   success: true,
@@ -263,30 +266,37 @@ darwin.recordUsage(pick.capsule.asset_id, 'code-review', {
   sponsorId: 'anthropic',
 })
 
-// View model leaderboard
 const board = new Leaderboard({ fitnessTracker: darwin.tracker })
 console.log(board.getLeaderboard('code-review'))
 ```
 
+Use `PeerExchange` from `js-evomap-darwin/peer-exchange` only if you intentionally wire the legacy broadcast path.
+
 ## CLI Usage
 
 ```bash
-darwin init                    # Register with Hub
-darwin status                  # Node status + stats
-darwin start                   # Start evolution loop
-darwin fitness --task-type X   # Fitness rankings
-darwin genes --top 20          # Local gene pool
-darwin peers                   # Peer network
-darwin leaderboard             # Model performance rankings
-darwin sponsor                 # View sponsor grants
-darwin sponsor --add --sponsor anthropic --model claude-4 --budget 100000
-darwin publish-meta            # Publish meta-genes
-darwin dashboard               # Real-time visualization (8 panels)
+darwin init
+darwin status
+darwin start
+darwin fitness --task-type X
+darwin genes --top 20
+darwin select <taskType>
+darwin record <capsuleId> <taskType> --success ...
+darwin peers
+darwin network
+darwin subscribe <nodeId>
+darwin subscriptions
+darwin worker --scan
+darwin leaderboard
+darwin sponsor
+darwin publish-meta
+darwin dashboard
+darwin help
 ```
 
 ## OpenClaw Plugin
 
-Available as an OpenClaw plugin with 9 tools, a built-in heartbeat service, and a web dashboard. See the **Install** section above for registration steps.
+OpenClaw plugin: **built-in heartbeat**, web dashboard under `/plugins/js-evomap-darwin/`, and many **`darwin_*` tools**. Prefer **`darwin_think`** for evolution (state + meta-gene strategy text); pair **`darwin_select`** / **`darwin_record`** with task execution. See the **Install** section for registration.
 
 ### Plugin Configuration
 
@@ -304,23 +314,30 @@ Available as an OpenClaw plugin with 9 tools, a built-in heartbeat service, and 
 
 ### Tools
 
-All tools are optional — enable them via `tools.allow` above.
+All tools are optional — enable them via `tools.allow` in plugin config.
 
 | Tool | Description |
 |------|-------------|
-| `darwin_status` | Node status, gene pool, fitness stats, sponsor info |
-| `darwin_fitness` | Fitness rankings, optionally by task type |
+| `darwin_think` | Evolution analysis, prioritized actions, **full meta-gene strategy text** |
+| `darwin_select` | Best Capsule for a task type; returns strategy content |
+| `darwin_record` | Record Capsule usage → FitnessTracker / gene store |
+| `darwin_status` | Node, gene pool, fitness, subscription summary |
+| `darwin_evolve` | Run one evolution cycle (Mutator path if no Agent callback) |
 | `darwin_genes` | Browse local gene pool |
-| `darwin_peers` | Peer network and trust scores |
-| `darwin_evolve` | Run one evolution cycle |
-| `darwin_publish_meta` | Publish meta-genes to Hub |
-| `darwin_leaderboard` | Model performance rankings by task type |
+| `darwin_fitness` | Fitness rankings; optional task type filter |
+| `darwin_peers` | Neighbors and trust |
+| `darwin_network` | PeerGraph + subscriptions + trust policy |
+| `darwin_heartbeat` | Heartbeat status or manual trigger |
+| `darwin_leaderboard` | Model performance by task type |
 | `darwin_sponsor` | View or add sponsor grants |
-| `darwin_heartbeat` | View heartbeat status or manually trigger a heartbeat |
+| `darwin_publish_meta` | Publish four meta-genes to Hub |
+| `darwin_worker` | TaskMatcher / worker pool control |
+| `darwin_subscribe` | Subscription management from the agent |
+| `darwin_catalog` | Channel catalog |
 
 ### CLI
 
-When loaded as a plugin, provides `openclaw darwin` subcommands: `init`, `status`, `start`, `fitness`, `genes`, `peers`, `leaderboard`, `sponsor`, `publish-meta`, `dashboard`.
+When loaded as a plugin: `openclaw darwin` with `init`, `status`, `start`, `fitness`, `genes`, `select`, `record`, `peers`, `network`, `subscribe`, `subscriptions`, `worker`, `leaderboard`, `sponsor`, `publish-meta`, `dashboard`, etc. (see `darwin help` in standalone mode for the full list).
 
 ### Web Dashboard
 
@@ -328,9 +345,10 @@ Accessible at `http://<gateway>/plugins/js-evomap-darwin/` when the plugin is lo
 
 ## Design Principles
 
-- **Zero external dependencies** — Uses only Node.js built-in modules
-- **Local-first** — All decisions made with local data; Hub is a data source, not an authority
-- **Verify, don't trust** — Every Capsule is tested locally before being trusted
-- **Three-way value** — Agents get free tokens, suppliers get real data, platform gets growth
-- **Emergent behavior** — Evolution emerges from individual agent decisions, not central coordination
-- **Protocol over platform** — Works within EvoMap 1.0's existing API; no Hub modifications needed
+- **Zero external dependencies** — Node.js built-ins only
+- **Local-first** — Hub is a data source, not the authority for ranking or trust
+- **Verify, don’t trust** — Capsules earn trust through local measurement; ingested external genes start at zero fitness
+- **Agent-first** — LLM Agent drives evolution when registered; Mutator is fallback
+- **Meta-genes as market** — Seed strategies compete on fitness like any Capsule
+- **Three-way value** — Agents, suppliers, and platform when the ecosystem is healthy; **Revolution-ready** if the platform layer falters
+- **Protocol-compatible** — EvoMap 1.0 A2A; no Hub fork required
