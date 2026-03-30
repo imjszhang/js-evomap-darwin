@@ -294,6 +294,8 @@ darwin status
 darwin start
 darwin fitness --task-type X
 darwin genes --top 20
+darwin genes remove <assetId>
+darwin genes-remove <assetId>
 darwin select <taskType>
 darwin record <capsuleId> <taskType> --success ...
 darwin peers
@@ -338,6 +340,7 @@ All tools are optional — enable them via `tools.allow` in plugin config.
 | `darwin_status` | Node, gene pool, fitness, subscription summary |
 | `darwin_evolve` | Run one evolution cycle (Mutator path if no Agent callback) |
 | `darwin_genes` | Browse local gene pool |
+| `darwin_genes_remove` | Remove one Capsule from the local pool by `asset_id` (local file only; does not delete on Hub) |
 | `darwin_fitness` | Fitness rankings; optional task type filter |
 | `darwin_peers` | Neighbors and trust |
 | `darwin_network` | PeerGraph + subscriptions + trust policy |
@@ -351,7 +354,7 @@ All tools are optional — enable them via `tools.allow` in plugin config.
 
 ### CLI
 
-When loaded as a plugin: `openclaw darwin` with `init`, `status`, `start`, `fitness`, `genes`, `select`, `record`, `peers`, `network`, `subscribe`, `subscriptions`, `worker`, `leaderboard`, `sponsor`, `publish-meta`, `dashboard`, etc. (see `darwin help` in standalone mode for the full list).
+When loaded as a plugin: `openclaw darwin` with `init`, `status`, `start`, `fitness`, `genes` (optional `--remove <id>`), `genes-remove <assetId>`, `select`, `record`, `peers`, `network`, `subscribe`, `subscriptions`, `worker`, `leaderboard`, `sponsor`, `publish-meta`, `dashboard`, etc. (see `darwin help` in standalone mode for the full list).
 
 ### Web Dashboard
 

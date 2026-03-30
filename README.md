@@ -168,6 +168,7 @@ Full Agent toolkit and built-in heartbeat as an OpenClaw plugin:
 | `darwin_status` | Node, gene pool, fitness, subscription overview |
 | `darwin_evolve` | Manually run one evolution cycle |
 | `darwin_genes` | Browse local gene pool |
+| `darwin_genes_remove` | Remove one Capsule from the local pool by `asset_id` (local only) |
 | `darwin_fitness` | Fitness ranking; filter by task type |
 | `darwin_peers` | Neighbors and trust |
 | `darwin_network` | Decentralized view (PeerGraph + subscriptions + trust policy) |

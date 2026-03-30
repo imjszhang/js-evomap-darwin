@@ -18,6 +18,18 @@ const MIME_TYPES = {
   ".ico": "image/x-icon",
 };
 
+function resolveGenePoolAssetId(store, raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const t = raw.trim();
+  if (!t) return null;
+  if (store.has(t)) return t;
+  if (!t.startsWith("sha256:") && /^[a-f0-9]{64}$/i.test(t)) {
+    const lower = `sha256:${t.toLowerCase()}`;
+    if (store.has(lower)) return lower;
+  }
+  return null;
+}
+
 function sendJson(res, statusCode, body) {
   const payload = JSON.stringify(body);
   res.writeHead(statusCode, {
@@ -121,6 +133,89 @@ function pushEvent(type, message) {
   if (eventBuffer.length > EVENT_BUFFER_MAX) {
     eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_MAX);
   }
+  broadcastSSE("event", evt);
+}
+
+// ── SSE (Server-Sent Events) infrastructure ─────────────────────────────
+
+const sseClients = new Set();
+const SSE_KEEPALIVE_MS = 25_000;
+
+function sendSSE(res, event, data) {
+  try {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  } catch { /* dead connection */ }
+}
+
+function broadcastSSE(event, data) {
+  for (const res of sseClients) sendSSE(res, event, data);
+}
+
+function slimHeartbeatForInit(hb) {
+  if (!hb) return null;
+  return {
+    timestamp: hb.timestamp,
+    status: hb.status,
+    survivalStatus: hb.survivalStatus,
+    creditBalance: hb.creditBalance,
+    availableWork: (hb.availableWork || []).slice(0, 80),
+    nextHeartbeatMs: hb.nextHeartbeatMs,
+    pendingEvents: hb.pendingEvents,
+  };
+}
+
+function buildFullSnapshot(darwin) {
+  const status = darwin.getStatus();
+  const slimStatus = {
+    ...status,
+    heartbeat: slimHeartbeatForInit(status.heartbeat),
+  };
+  return {
+    status: slimStatus,
+    genes: darwin.store.ranked(15).map((g) => ({
+      assetId: g.assetId, fitness: g.fitness, source: g.source || "hub",
+      summary: g.capsule?.summary, triggers: g.capsule?.trigger, capsule: g.capsule,
+    })),
+    peers: darwin.subscription
+      ? (() => {
+          const graph = darwin.subscription.graph;
+          const nodes = graph.getDarwinNodes();
+          const subs = new Set(darwin.subscription.getSubscriptions().map((s) => s.nodeId));
+          const subscribers = new Set(darwin.subscription.getSubscribers().map((s) => s.nodeId));
+          return nodes.map((p) => ({
+            nodeId: p.nodeId, trust: p.trust ?? 0,
+            isSubscription: subs.has(p.nodeId), isSubscriber: subscribers.has(p.nodeId),
+          }));
+        })()
+      : [],
+    leaderboard: status.leaderboard || [],
+    revolution: darwin.getRevolutionStatus?.() ?? null,
+    sponsor: status.sponsor,
+    worker: status.worker,
+    published: null,
+    events: eventBuffer.slice(-30),
+  };
+}
+
+let sseKeepaliveTimer = null;
+function startSSEKeepalive() {
+  if (sseKeepaliveTimer) return;
+  sseKeepaliveTimer = setInterval(() => {
+    for (const res of sseClients) {
+      try { res.write(":keepalive\n\n"); } catch { sseClients.delete(res); }
+    }
+  }, SSE_KEEPALIVE_MS);
+}
+
+function broadcastDarwinStatus(darwin) {
+  broadcastSSE("status", darwin.getStatus());
+}
+
+function broadcastDarwinGenes(darwin) {
+  broadcastSSE("genes", darwin.store.ranked(15).map((g) => ({
+    assetId: g.assetId, fitness: g.fitness, source: g.source || "hub",
+    summary: g.capsule?.summary, triggers: g.capsule?.trigger, capsule: g.capsule,
+  })));
 }
 
 async function getDarwin(pluginCfg) {
@@ -150,23 +245,40 @@ async function getDarwin(pluginCfg) {
   darwinInstance.use(new Subscription({ hub: darwinInstance.hub, dataDir, trustPolicy, peerGraph }));
   darwinInstance.use(new TaskMatcher({ hub: darwinInstance.hub, dataDir }));
 
+  // Wire GeneStore file-watch → SSE broadcast
+  darwinInstance.store.onChange = () => {
+    broadcastDarwinStatus(darwinInstance);
+    broadcastDarwinGenes(darwinInstance);
+  };
+
   darwinInstance.on("fetch", (data) => {
     pushEvent("fetch", `Fetched ${data.total} assets, ingested ${data.ingested}`);
+    broadcastDarwinStatus(darwinInstance);
+    broadcastDarwinGenes(darwinInstance);
   });
   darwinInstance.on("record", (data) => {
     pushEvent("record", `Recorded: ${data.capsuleId?.slice(0, 16)}... fitness=${data.fitness?.toFixed(3) ?? '?'}`);
+    broadcastDarwinStatus(darwinInstance);
   });
   darwinInstance.on("evolve", () => {
     pushEvent("evolve", "Evolution cycle completed");
+    broadcastDarwinStatus(darwinInstance);
+    broadcastDarwinGenes(darwinInstance);
+    const status = darwinInstance.getStatus();
+    if (status.leaderboard?.length > 0) broadcastSSE("leaderboard", status.leaderboard);
+    if (darwinInstance.getRevolutionStatus) broadcastSSE("revolution", darwinInstance.getRevolutionStatus());
+    if (status.sponsor) broadcastSSE("sponsor", status.sponsor);
   });
   darwinInstance.on("error", (e) => {
     pushEvent("error", `${e.phase}: ${e.error}`);
   });
   darwinInstance.on("grant-consumed", (data) => {
     pushEvent("sponsor", `Grant ${data.grantId.slice(0, 16)}... consumed ${data.amount} tokens (${data.phase})`);
+    if (darwinInstance.sponsor) broadcastSSE("sponsor", darwinInstance.sponsor.getStats());
   });
   darwinInstance.on("task-matched", (data) => {
     pushEvent("task-matched", `Matched ${data.count} task(s), top: ${data.top?.task?.title || "?"} (score ${data.top?.matchScore})`);
+    if (darwinInstance.worker) broadcastSSE("worker", darwinInstance.worker.getStats());
   });
   darwinInstance.on("task-claimed", (data) => {
     pushEvent("task-claimed", `Claimed "${data.title}" (match ${data.matchScore}, signals: ${(data.matchedSignals || []).join(", ")})`);
@@ -180,18 +292,28 @@ async function getDarwin(pluginCfg) {
   darwinInstance.on("task-completed", (data) => {
     const contrib = data.contribution != null ? `, contribution=${data.contribution}` : "";
     pushEvent("task-completed", `Completed "${data.title}" → asset ${data.assetId?.slice(0, 16)}...${contrib}`);
+    broadcastDarwinStatus(darwinInstance);
+    if (darwinInstance.worker) {
+      const stats = darwinInstance.worker.getStats();
+      broadcastSSE("worker", stats);
+      broadcastSSE("tasks", { activeTasks: stats.activeTasks, completedHistory: stats.completedHistory });
+    }
   });
   darwinInstance.on("task-failed", (data) => {
     pushEvent("task-failed", `Task ${data.taskId} failed: ${data.error}`);
+    if (darwinInstance.worker) broadcastSSE("worker", darwinInstance.worker.getStats());
   });
   darwinInstance.on("bootstrap", (data) => {
     pushEvent("bootstrap", `Bootstrap evaluated ${data.evaluated} capsule(s), avg score: ${data.avgScore}`);
+    broadcastDarwinStatus(darwinInstance);
+    broadcastDarwinGenes(darwinInstance);
   });
   darwinInstance.on("low-credit", (data) => {
     pushEvent("low-credit", `Low credits (${data.creditBalance}) — skipping Hub fetch to conserve resources`);
   });
   darwinInstance.on("report", (data) => {
     pushEvent("report", `Reported fitness for ${data.capsuleId?.slice(0, 16)}... (fitness=${data.fitness?.toFixed(3)}, samples=${data.samples})`);
+    broadcastDarwinStatus(darwinInstance);
   });
   darwinInstance.on("pending-event", (data) => {
     const type = data.type || data.event_type || "unknown";
@@ -281,6 +403,45 @@ export default function register(api) {
         })));
       } catch (err) {
         return textResult(`Gene query failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_genes_remove",
+    label: "Darwin: Remove Gene",
+    description:
+      "Remove one Capsule from the local gene pool by asset_id. " +
+      "Persists to gene-store.json; does not delete anything on the Hub.",
+    parameters: {
+      type: "object",
+      properties: {
+        assetId: {
+          type: "string",
+          description: "Capsule asset_id (sha256:... or 64-char hex)",
+        },
+      },
+      required: ["assetId"],
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const raw = String(params.assetId || "").trim();
+        const id = resolveGenePoolAssetId(darwin.store, raw);
+        if (!id) {
+          return textResult(`No gene in pool matches "${raw}". Use darwin_genes to list asset_ids.`);
+        }
+        const ok = darwin.store.remove(id);
+        if (!ok) return textResult(`Failed to remove ${id}`);
+        broadcastDarwinStatus(darwin);
+        broadcastDarwinGenes(darwin);
+        return jsonResult({
+          removed: id,
+          poolSize: darwin.store.size,
+          capacity: darwin.store.capacity,
+        });
+      } catch (err) {
+        return textResult(`Gene remove failed: ${err.message}`);
       }
     },
   }, { optional: true });
@@ -905,6 +1066,38 @@ export default function register(api) {
     },
   });
 
+  // ── SSE Stream endpoint ──────────────────────────────────────────────
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/stream`,
+    auth: "plugin",
+    match: "exact",
+    async handler(req, res) {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      });
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        sendSSE(res, "init", buildFullSnapshot(darwin));
+      } catch (err) {
+        sendSSE(res, "error", { message: err.message });
+      }
+      sseClients.add(res);
+      startSSEKeepalive();
+      req.on("close", () => {
+        sseClients.delete(res);
+        if (sseClients.size === 0 && sseKeepaliveTimer) {
+          clearInterval(sseKeepaliveTimer);
+          sseKeepaliveTimer = null;
+        }
+      });
+      return true;
+    },
+  });
+
   api.registerHttpRoute({
     path: `${ROUTE_PREFIX}/api/status`,
     auth: "plugin",
@@ -1401,11 +1594,21 @@ export default function register(api) {
         .command("genes")
         .description("View local gene pool")
         .option("--top <n>", "Number of top genes to show")
+        .option("--remove <id>", "Remove one Capsule from the pool by asset_id")
         .action(async (opts) => {
           const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           const args = [];
           if (opts.top) args.push("--top", opts.top);
+          if (opts.remove) args.push("--remove", opts.remove);
           await run("genes", args);
+        });
+
+      darwin
+        .command("genes-remove <assetId>")
+        .description("Remove one Capsule from the local gene pool (same as genes remove)")
+        .action(async (assetId) => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          await run("genes-remove", [assetId]);
         });
 
       darwin

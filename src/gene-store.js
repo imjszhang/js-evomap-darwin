@@ -1,8 +1,10 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, watch } from "node:fs";
 import { join } from "node:path";
 
 const DEFAULT_CAPACITY = 200;
 const MAX_CAPSULE_SIZE = 50_000;
+const WATCH_DEBOUNCE_MS = 300;
+const SAVE_GUARD_MS = 500;
 
 /**
  * Local gene pool with fixed capacity and fitness-based eviction.
@@ -12,13 +14,19 @@ export class GeneStore {
   #filePath;
   #capacity;
   #genes; // Map<asset_id, { capsule, addedAt, fitness, source }>
+  #onChange;
+  #watcher;
+  #saving = false;
+  #watchDebounceTimer;
 
-  constructor({ dataDir = "./data", capacity = DEFAULT_CAPACITY } = {}) {
+  constructor({ dataDir = "./data", capacity = DEFAULT_CAPACITY, onChange } = {}) {
     mkdirSync(dataDir, { recursive: true });
     this.#filePath = join(dataDir, "gene-store.json");
     this.#capacity = capacity;
+    this.#onChange = typeof onChange === "function" ? onChange : null;
     this.#genes = new Map();
     this.#load();
+    this.#startWatching();
   }
 
   get size() { return this.#genes.size; }
@@ -27,6 +35,10 @@ export class GeneStore {
 
   get lowestFitness() {
     return this.#genes.size > 0 ? this.#getLowestFitness() : 0;
+  }
+
+  set onChange(fn) {
+    this.#onChange = typeof fn === "function" ? fn : null;
   }
 
   /**
@@ -150,6 +162,17 @@ export class GeneStore {
     return obj;
   }
 
+  /**
+   * Close the file watcher. Call on graceful shutdown.
+   */
+  destroy() {
+    if (this.#watcher) {
+      this.#watcher.close();
+      this.#watcher = null;
+    }
+    clearTimeout(this.#watchDebounceTimer);
+  }
+
   // ── Private ───────────────────────────────────────────────────────────
 
   #isValidCapsule(capsule) {
@@ -205,6 +228,39 @@ export class GeneStore {
   }
 
   #save() {
+    this.#saving = true;
     writeFileSync(this.#filePath, JSON.stringify(this.toJSON(), null, 2));
+    setTimeout(() => { this.#saving = false; }, SAVE_GUARD_MS);
+  }
+
+  #startWatching() {
+    try {
+      if (!existsSync(this.#filePath)) return;
+      this.#watcher = watch(this.#filePath, () => {
+        clearTimeout(this.#watchDebounceTimer);
+        this.#watchDebounceTimer = setTimeout(() => this.#reloadIfChanged(), WATCH_DEBOUNCE_MS);
+      });
+      this.#watcher.on("error", () => {});
+    } catch {
+      // watch not supported or file gone — silently skip
+    }
+  }
+
+  #reloadIfChanged() {
+    if (this.#saving) return;
+    if (!existsSync(this.#filePath)) return;
+    try {
+      const raw = JSON.parse(readFileSync(this.#filePath, "utf-8"));
+      this.#genes.clear();
+      for (const [id, entry] of Object.entries(raw)) {
+        if (!entry.source) {
+          entry.source = entry.capsule?._mutation ? "mutation" : "hub";
+        }
+        this.#genes.set(id, entry);
+      }
+      this.#onChange?.();
+    } catch {
+      // corrupted or mid-write — ignore, next change will retry
+    }
   }
 }

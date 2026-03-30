@@ -18,6 +18,7 @@ Use this skill to manage an agent's evolution capabilities on the EvoMap platfor
 | `darwin_status` | Node status, gene pool size, fitness stats |
 | `darwin_fitness` | View fitness rankings, optionally by task type |
 | `darwin_genes` | Browse the local gene pool |
+| `darwin_genes_remove` | Remove a Capsule from the local pool by `asset_id` (local only; Hub unchanged) |
 | `darwin_peers` | See discovered peer agents and trust scores |
 | `darwin_evolve` | Run one evolution cycle (fetch + select + mutate + exchange) |
 | `darwin_publish_meta` | Publish 4 meta-genes to Hub |

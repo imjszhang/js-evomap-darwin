@@ -31,6 +31,19 @@ function createDarwin({ withWorker = false, legacyPeers = false } = {}) {
   return darwin;
 }
 
+/** Resolve Capsule asset_id against GeneStore (exact, or 64-char hex with sha256: prefix). */
+function resolveAssetId(store, raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const t = raw.trim();
+  if (!t) return null;
+  if (store.has(t)) return t;
+  if (!t.startsWith("sha256:") && /^[a-f0-9]{64}$/i.test(t)) {
+    const lower = `sha256:${t.toLowerCase()}`;
+    if (store.has(lower)) return lower;
+  }
+  return null;
+}
+
 function parseFlags(args) {
   const flags = {};
   for (let i = 0; i < args.length; i++) {
@@ -170,8 +183,50 @@ async function cmdFitness(args) {
   console.log("");
 }
 
+async function cmdGenesRemove(args) {
+  const flags = parseFlags(args);
+  const raw = flags._positional?.[0];
+  if (!raw) {
+    console.log(`
+  Usage: darwin genes-remove <assetId>
+         darwin genes remove <assetId>
+         darwin genes --remove <assetId>
+
+  <assetId> is the Capsule asset_id (e.g. sha256:... or 64-char hex).
+`);
+    return;
+  }
+  const darwin = createDarwin();
+  const id = resolveAssetId(darwin.store, raw);
+  if (!id) {
+    console.error(`\n  No gene in pool matching: ${raw}\n`);
+    process.exit(1);
+  }
+  const ok = darwin.store.remove(id);
+  if (!ok) {
+    console.error(`\n  Failed to remove ${id}\n`);
+    process.exit(1);
+  }
+  console.log(`\n  Removed: ${id}`);
+  console.log(`  Pool:    ${darwin.store.size} / ${darwin.store.capacity}\n`);
+}
+
 async function cmdGenes(args) {
   const flags = parseFlags(args);
+  if (flags._positional?.[0] === "remove") {
+    const raw = flags._positional[1] || flags.remove;
+    if (!raw) {
+      console.log("\n  Usage: darwin genes remove <assetId>\n");
+      return;
+    }
+    await cmdGenesRemove([raw]);
+    return;
+  }
+  if (flags.remove && flags.remove !== true && typeof flags.remove === "string") {
+    await cmdGenesRemove([flags.remove]);
+    return;
+  }
+
   const top = parseInt(flags.top || "20", 10);
   const darwin = createDarwin();
   const ranked = darwin.store.ranked(top);
@@ -794,6 +849,8 @@ function cmdHelp() {
     start                   Start the evolution loop
     fitness [--task-type X] View fitness rankings
     genes [--top N]         View local gene pool
+    genes remove <assetId>  Remove one Capsule from the pool (local only)
+    genes-remove <assetId>  Same as genes remove
     select <taskType> [--count N]  Select best capsule for a task
     record <id> <type> --success|--fail  Record capsule usage result
     peers                   View neighbor list (legacy)
@@ -829,6 +886,7 @@ const COMMANDS = {
   start: cmdStart,
   fitness: cmdFitness,
   genes: cmdGenes,
+  "genes-remove": cmdGenesRemove,
   select: cmdSelect,
   record: cmdRecord,
   peers: cmdPeers,
