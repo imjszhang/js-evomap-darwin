@@ -1045,6 +1045,394 @@ export default function register(api) {
     },
   }, { optional: true });
 
+  // ── Hub Discovery Tools ──────────────────────────────────────────────
+
+  api.registerTool({
+    name: "darwin_hub_stats",
+    label: "Darwin: Hub Stats",
+    description: "Fetch EvoMap Hub health and statistics (GET /a2a/stats). No auth required.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.getStats();
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Hub stats failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_hub_help",
+    label: "Darwin: Hub Help",
+    description: "Look up any EvoMap concept or endpoint via the Help API (GET /a2a/help?q=...). No auth required.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Concept or endpoint to look up (e.g. 'marketplace', '/a2a/publish')" },
+      },
+      required: ["query"],
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.getHelp(params.query);
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Hub help failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_node_info",
+    label: "Darwin: Node Info",
+    description: "Fetch reputation and info for a node (GET /a2a/nodes/:nodeId). Defaults to own node.",
+    parameters: {
+      type: "object",
+      properties: {
+        nodeId: { type: "string", description: "Node ID to look up (optional, defaults to self)" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.getNodeInfo(params.nodeId);
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Node info failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  // ── Task & Bounty Tools ─────────────────────────────────────────────
+
+  api.registerTool({
+    name: "darwin_tasks",
+    label: "Darwin: List Tasks",
+    description: "List open bounty tasks on the EvoMap Hub (GET /task/list).",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.getTaskList();
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Task list failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_my_tasks",
+    label: "Darwin: My Tasks",
+    description: "View tasks claimed/completed by this node (GET /task/my).",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.getMyTasks();
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`My tasks failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_task_claim",
+    label: "Darwin: Claim Task",
+    description: "Claim an open bounty task (POST /task/claim).",
+    parameters: {
+      type: "object",
+      properties: {
+        taskId: { type: "string", description: "The task_id to claim" },
+      },
+      required: ["taskId"],
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.claimTask(params.taskId);
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Task claim failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_task_complete",
+    label: "Darwin: Complete Task",
+    description: "Complete a claimed task by submitting an asset (POST /task/complete).",
+    parameters: {
+      type: "object",
+      properties: {
+        taskId: { type: "string", description: "The task_id to complete" },
+        assetId: { type: "string", description: "The asset_id of the solution" },
+      },
+      required: ["taskId", "assetId"],
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.completeTask(params.taskId, params.assetId);
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Task complete failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_ask",
+    label: "Darwin: Create Bounty Ask",
+    description: "Create a bounty task for other agents to solve (POST /a2a/ask).",
+    parameters: {
+      type: "object",
+      properties: {
+        description: { type: "string", description: "Task description" },
+        bounty: { type: "number", description: "Bounty amount in credits (optional)" },
+        signals: { type: "array", items: { type: "string" }, description: "Signal tags (optional)" },
+      },
+      required: ["description"],
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const opts = {};
+        if (params.bounty != null) opts.bounty = params.bounty;
+        if (params.signals?.length) opts.signals = params.signals;
+        const res = await darwin.hub.createAsk(params.description, opts);
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Ask failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  // ── Asset Discovery Tools ───────────────────────────────────────────
+
+  api.registerTool({
+    name: "darwin_assets",
+    label: "Darwin: Browse Assets",
+    description: "Browse Hub assets — promoted, ranked, or trending.",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["promoted", "ranked", "trending"], description: "Listing mode (default: promoted)" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        let res;
+        if (params.mode === "ranked") res = await darwin.hub.getRankedAssets();
+        else if (params.mode === "trending") res = await darwin.hub.getTrending();
+        else res = await darwin.hub.getPromotedAssets();
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Assets failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_assets_search",
+    label: "Darwin: Search Assets",
+    description: "Search Hub assets by signal tags or semantic query.",
+    parameters: {
+      type: "object",
+      properties: {
+        signals: { type: "string", description: "Comma-separated signals for signal search" },
+        query: { type: "string", description: "Natural language query for semantic search" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        let res;
+        if (params.query) res = await darwin.hub.semanticSearch(params.query);
+        else if (params.signals) res = await darwin.hub.searchAssets(params.signals);
+        else return textResult("Provide signals or query.");
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Asset search failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  // ── DM Tools ────────────────────────────────────────────────────────
+
+  api.registerTool({
+    name: "darwin_dm_send",
+    label: "Darwin: Send DM",
+    description: "Send a direct message to another node (POST /a2a/dm).",
+    parameters: {
+      type: "object",
+      properties: {
+        toNodeId: { type: "string", description: "Target node ID" },
+        message: { type: "string", description: "Message text" },
+      },
+      required: ["toNodeId", "message"],
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.sendDM(params.toNodeId, { text: params.message });
+        return jsonResult(res?.payload ?? res ?? { ok: true });
+      } catch (err) {
+        return textResult(`DM send failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_dm_inbox",
+    label: "Darwin: DM Inbox",
+    description: "Check DM inbox for incoming messages (GET /a2a/dm/inbox).",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.pollDM();
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`DM inbox failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  // ── Credits & Earnings Tools ────────────────────────────────────────
+
+  api.registerTool({
+    name: "darwin_credits",
+    label: "Darwin: Credits",
+    description: "View credit price and economy overview.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const [price, econ] = await Promise.allSettled([
+          darwin.hub.getCreditPrice(),
+          darwin.hub.getCreditEconomics(),
+        ]);
+        return jsonResult({
+          price: price.status === "fulfilled" ? (price.value?.payload ?? price.value) : null,
+          economics: econ.status === "fulfilled" ? (econ.value?.payload ?? econ.value) : null,
+        });
+      } catch (err) {
+        return textResult(`Credits failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_earnings",
+    label: "Darwin: Earnings",
+    description: "View earnings for this node.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.getEarnings();
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Earnings failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  // ── Service Tools ───────────────────────────────────────────────────
+
+  api.registerTool({
+    name: "darwin_services",
+    label: "Darwin: Service Marketplace",
+    description: "Search the EvoMap service marketplace.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query (optional)" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.searchServices(params.query || undefined);
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Service search failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  // ── Session Tools ───────────────────────────────────────────────────
+
+  api.registerTool({
+    name: "darwin_session",
+    label: "Darwin: Session",
+    description: "Manage collaboration sessions — create, join, send message, or leave.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["create", "join", "message", "leave"], description: "Action to perform" },
+        sessionId: { type: "string", description: "Session ID (required for join/message/leave)" },
+        topic: { type: "string", description: "Topic for new session (for create)" },
+        message: { type: "string", description: "Message text (for message action)" },
+      },
+      required: ["action"],
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        switch (params.action) {
+          case "create": {
+            const res = await darwin.hub.createSession({ topic: params.topic || "general" });
+            return jsonResult(res?.payload ?? res);
+          }
+          case "join": {
+            if (!params.sessionId) return textResult("sessionId required");
+            const res = await darwin.hub.joinSession(params.sessionId);
+            return jsonResult(res?.payload ?? res);
+          }
+          case "message": {
+            if (!params.sessionId || !params.message) return textResult("sessionId and message required");
+            const res = await darwin.hub.sendSessionMessage(params.sessionId, params.message);
+            return jsonResult(res?.payload ?? res);
+          }
+          case "leave": {
+            if (!params.sessionId) return textResult("sessionId required");
+            const res = await darwin.hub.leaveSession(params.sessionId);
+            return jsonResult(res?.payload ?? res);
+          }
+          default:
+            return textResult(`Unknown action: ${params.action}`);
+        }
+      } catch (err) {
+        return textResult(`Session failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  // ── Governance Tools ────────────────────────────────────────────────
+
+  api.registerTool({
+    name: "darwin_projects",
+    label: "Darwin: Projects",
+    description: "List official EvoMap projects.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const res = await darwin.hub.getProjectList();
+        return jsonResult(res?.payload ?? res);
+      } catch (err) {
+        return textResult(`Projects failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
   // ── Gateway HTTP Routes: Dashboard + REST API ───────────────────────
 
   api.registerHttpRoute({

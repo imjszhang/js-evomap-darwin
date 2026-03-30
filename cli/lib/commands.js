@@ -831,6 +831,675 @@ async function cmdNetwork() {
   console.log("");
 }
 
+// ── Hub Discovery ────────────────────────────────────────────────────────
+
+async function cmdHubStats() {
+  const darwin = createDarwin();
+  console.log("\n  Fetching Hub stats...\n");
+  try {
+    const res = await darwin.hub.getStats();
+    const data = res?.payload ?? res;
+    if (typeof data === "object") {
+      for (const [k, v] of Object.entries(data)) {
+        console.log(`  ${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
+      }
+    } else {
+      console.log(`  ${JSON.stringify(data, null, 2)}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdHubHelp(args) {
+  const flags = parseFlags(args);
+  const query = flags._positional?.join(" ") || "";
+  if (!query) {
+    console.log("\n  Usage: darwin hub-help <query>\n");
+    console.log("  Examples:");
+    console.log("    darwin hub-help marketplace");
+    console.log("    darwin hub-help /a2a/publish");
+    console.log("    darwin hub-help 任务\n");
+    return;
+  }
+  const darwin = createDarwin();
+  try {
+    const res = await darwin.hub.getHelp(query);
+    const data = res?.payload ?? res;
+    if (data.title) console.log(`\n  ── ${data.title} ──\n`);
+    if (data.summary) console.log(`  ${data.summary}\n`);
+    if (data.content) console.log(data.content);
+    if (data.related_endpoints?.length) {
+      console.log("  Related endpoints:");
+      for (const ep of data.related_endpoints) console.log(`    ${ep}`);
+    }
+    if (data.related_concepts?.length) {
+      console.log("  Related concepts:");
+      for (const c of data.related_concepts) console.log(`    ${c}`);
+    }
+  } catch (err) {
+    console.error(`\n  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdHubWiki() {
+  const darwin = createDarwin();
+  console.log("\n  Fetching full wiki...\n");
+  try {
+    const res = await darwin.hub.getWikiFull();
+    const data = res?.payload ?? res;
+    if (typeof data === "string") {
+      console.log(data);
+    } else if (data.docs) {
+      console.log(`  ${data.count ?? data.docs.length} documents:\n`);
+      for (const doc of data.docs) {
+        console.log(`  ── ${doc.slug} ──`);
+        console.log(`  ${(doc.content || "").slice(0, 200)}...\n`);
+      }
+    } else {
+      console.log(JSON.stringify(data, null, 2));
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdNodeInfo(args) {
+  const flags = parseFlags(args);
+  const nodeId = flags._positional?.[0];
+  const darwin = createDarwin();
+  const target = nodeId || darwin.hub.nodeId;
+  if (!target) {
+    console.log("\n  Usage: darwin node-info [nodeId]\n  (defaults to own node)\n");
+    return;
+  }
+  console.log(`\n  Fetching info for ${target}...\n`);
+  try {
+    const res = await darwin.hub.getNodeInfo(target);
+    const data = res?.payload ?? res;
+    if (typeof data === "object") {
+      for (const [k, v] of Object.entries(data)) {
+        console.log(`  ${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
+      }
+    } else {
+      console.log(`  ${JSON.stringify(data, null, 2)}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+// ── Tasks & Bounties ─────────────────────────────────────────────────────
+
+async function cmdTasks() {
+  const darwin = createDarwin();
+  console.log("\n  Fetching open tasks from Hub...\n");
+  try {
+    const res = await darwin.hub.getTaskList();
+    const tasks = res?.tasks ?? res?.payload?.tasks ?? (Array.isArray(res) ? res : []);
+    if (tasks.length === 0) {
+      console.log("  No open tasks right now.\n");
+      return;
+    }
+    console.log(`  ${tasks.length} task(s):\n`);
+    for (const t of tasks) {
+      const id = (t.task_id || t.id || "?").slice(0, 20);
+      const bounty = t.bounty != null ? `¤${t.bounty}` : "";
+      console.log(`  ${id.padEnd(22)} ${(t.status || "open").padEnd(10)} ${bounty.padStart(6)}  ${t.title || t.description || "(untitled)"}`);
+      if (t.signals?.length) console.log(`    signals: ${t.signals.join(", ")}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdMyTasks() {
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  console.log("\n  Fetching my tasks...\n");
+  try {
+    const res = await darwin.hub.getMyTasks();
+    const tasks = res?.tasks ?? res?.payload?.tasks ?? (Array.isArray(res) ? res : []);
+    if (tasks.length === 0) {
+      console.log("  No tasks found for this node.\n");
+      return;
+    }
+    console.log(`  ${tasks.length} task(s):\n`);
+    for (const t of tasks) {
+      const id = (t.task_id || t.id || "?").slice(0, 20);
+      const bounty = t.bounty != null ? `¤${t.bounty}` : "";
+      console.log(`  ${id.padEnd(22)} ${(t.status || "?").padEnd(12)} ${bounty.padStart(6)}  ${t.title || "(untitled)"}`);
+      if (t.completed_at) console.log(`    completed: ${t.completed_at}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdTaskClaim(args) {
+  const flags = parseFlags(args);
+  const taskId = flags._positional?.[0];
+  if (!taskId) {
+    console.log("\n  Usage: darwin task-claim <taskId>\n");
+    return;
+  }
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  console.log(`\n  Claiming task ${taskId}...\n`);
+  try {
+    const res = await darwin.hub.claimTask(taskId);
+    console.log(`  Claimed: ${res?.assignment_id || res?.payload?.assignment_id || "ok"}`);
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+    if (err.response?.correction) console.error(`  Fix: ${err.response.correction.fix}`);
+  }
+  console.log("");
+}
+
+async function cmdTaskComplete(args) {
+  const flags = parseFlags(args);
+  const taskId = flags._positional?.[0];
+  const assetId = flags._positional?.[1] || flags.asset;
+  if (!taskId || !assetId) {
+    console.log("\n  Usage: darwin task-complete <taskId> <assetId>\n");
+    return;
+  }
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  console.log(`\n  Completing task ${taskId}...\n`);
+  try {
+    const res = await darwin.hub.completeTask(taskId, assetId);
+    const reward = res?.reward ?? res?.payload?.reward;
+    console.log(`  Completed.${reward != null ? ` Reward: ¤${reward}` : ""}`);
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+    if (err.response?.correction) console.error(`  Fix: ${err.response.correction.fix}`);
+  }
+  console.log("");
+}
+
+// ── Asset Discovery ──────────────────────────────────────────────────────
+
+async function cmdAssets(args) {
+  const flags = parseFlags(args);
+  const darwin = createDarwin();
+
+  let label, fetcher;
+  if (flags.ranked) {
+    label = "Ranked Assets";
+    fetcher = () => darwin.hub.getRankedAssets();
+  } else if (flags.trending) {
+    label = "Trending Assets";
+    fetcher = () => darwin.hub.getTrending();
+  } else {
+    label = "Promoted Assets";
+    fetcher = () => darwin.hub.getPromotedAssets();
+  }
+
+  console.log(`\n  ── ${label} ──\n`);
+  try {
+    const res = await fetcher();
+    const assets = res?.assets ?? res?.payload?.assets ?? (Array.isArray(res) ? res : []);
+    if (assets.length === 0) {
+      console.log("  No assets found.\n");
+      return;
+    }
+    for (const a of assets.slice(0, 30)) {
+      const id = (a.asset_id || "?").slice(0, 24);
+      const score = a.score != null ? a.score.toFixed(2) : a.gdi != null ? a.gdi.toFixed(2) : "";
+      console.log(`  ${id.padEnd(26)} ${(a.type || "").padEnd(10)} ${score.padStart(6)}  ${a.summary || "(no summary)"}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdAsset(args) {
+  const flags = parseFlags(args);
+  const assetId = flags._positional?.[0];
+  if (!assetId) {
+    console.log("\n  Usage: darwin asset <assetId>\n");
+    return;
+  }
+  const darwin = createDarwin();
+  console.log(`\n  Fetching asset ${assetId.slice(0, 24)}...\n`);
+  try {
+    const res = await darwin.hub.getAsset(assetId);
+    const data = res?.payload ?? res;
+    console.log(JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdAssetsSearch(args) {
+  const flags = parseFlags(args);
+  const signals = flags._positional?.join(",") || "";
+  if (!signals) {
+    console.log("\n  Usage: darwin assets-search <signal1> [signal2] ...\n");
+    return;
+  }
+  const darwin = createDarwin();
+  console.log(`\n  Searching assets by signals: ${signals}...\n`);
+  try {
+    const res = await darwin.hub.searchAssets(signals);
+    const assets = res?.assets ?? res?.payload?.assets ?? (Array.isArray(res) ? res : []);
+    if (assets.length === 0) {
+      console.log("  No matching assets.\n");
+      return;
+    }
+    for (const a of assets.slice(0, 30)) {
+      const id = (a.asset_id || "?").slice(0, 24);
+      console.log(`  ${id.padEnd(26)} ${(a.type || "").padEnd(10)} ${a.summary || "(no summary)"}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdAssetsSemantic(args) {
+  const flags = parseFlags(args);
+  const query = flags._positional?.join(" ") || "";
+  if (!query) {
+    console.log("\n  Usage: darwin assets-semantic <query>\n");
+    return;
+  }
+  const darwin = createDarwin();
+  console.log(`\n  Semantic search: "${query}"...\n`);
+  try {
+    const res = await darwin.hub.semanticSearch(query);
+    const assets = res?.assets ?? res?.payload?.assets ?? (Array.isArray(res) ? res : []);
+    if (assets.length === 0) {
+      console.log("  No matching assets.\n");
+      return;
+    }
+    for (const a of assets.slice(0, 20)) {
+      const id = (a.asset_id || "?").slice(0, 24);
+      const score = a.similarity != null ? a.similarity.toFixed(3) : "";
+      console.log(`  ${id.padEnd(26)} ${score.padStart(6)}  ${a.summary || "(no summary)"}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+// ── DM ───────────────────────────────────────────────────────────────────
+
+async function cmdDmSend(args) {
+  const flags = parseFlags(args);
+  const toNodeId = flags._positional?.[0];
+  const message = flags._positional?.slice(1).join(" ") || flags.message || "";
+  if (!toNodeId || !message) {
+    console.log("\n  Usage: darwin dm-send <nodeId> <message>\n");
+    return;
+  }
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  try {
+    await darwin.hub.sendDM(toNodeId, { text: message });
+    console.log(`\n  DM sent to ${toNodeId}.\n`);
+  } catch (err) {
+    console.error(`\n  Failed: ${err.message}\n`);
+  }
+}
+
+async function cmdDmInbox() {
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  console.log("\n  Fetching DM inbox...\n");
+  try {
+    const res = await darwin.hub.pollDM();
+    const messages = res?.messages ?? res?.payload?.messages ?? (Array.isArray(res) ? res : []);
+    if (messages.length === 0) {
+      console.log("  Inbox is empty.\n");
+      return;
+    }
+    for (const m of messages) {
+      const from = m.from || m.sender_id || "?";
+      const time = m.timestamp || "";
+      const text = typeof m.payload === "string" ? m.payload : m.payload?.text || JSON.stringify(m.payload);
+      console.log(`  [${time}] ${from}: ${text}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+// ── Credits & Earnings ───────────────────────────────────────────────────
+
+async function cmdCredits() {
+  const darwin = createDarwin();
+  console.log("\n  ── Credit Economy ──\n");
+  try {
+    const [price, econ] = await Promise.allSettled([
+      darwin.hub.getCreditPrice(),
+      darwin.hub.getCreditEconomics(),
+    ]);
+    if (price.status === "fulfilled") {
+      const p = price.value?.payload ?? price.value;
+      if (typeof p === "object") {
+        for (const [k, v] of Object.entries(p)) {
+          console.log(`  ${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
+        }
+      } else {
+        console.log(`  Price: ${JSON.stringify(p)}`);
+      }
+    }
+    if (econ.status === "fulfilled") {
+      const e = econ.value?.payload ?? econ.value;
+      if (typeof e === "object") {
+        console.log("");
+        for (const [k, v] of Object.entries(e)) {
+          console.log(`  ${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdCreditsEstimate(args) {
+  const flags = parseFlags(args);
+  const amount = flags._positional?.[0];
+  if (!amount) {
+    console.log("\n  Usage: darwin credits-estimate <amount>\n");
+    return;
+  }
+  const darwin = createDarwin();
+  try {
+    const res = await darwin.hub.getCreditEstimate(amount);
+    const data = res?.payload ?? res;
+    console.log(`\n  Estimate for ${amount} credits:\n`);
+    if (typeof data === "object") {
+      for (const [k, v] of Object.entries(data)) {
+        console.log(`  ${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
+      }
+    } else {
+      console.log(`  ${JSON.stringify(data)}`);
+    }
+  } catch (err) {
+    console.error(`\n  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdEarnings() {
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  console.log("\n  ── Earnings ──\n");
+  try {
+    const res = await darwin.hub.getEarnings();
+    const data = res?.payload ?? res;
+    if (typeof data === "object") {
+      for (const [k, v] of Object.entries(data)) {
+        console.log(`  ${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`);
+      }
+    } else {
+      console.log(`  ${JSON.stringify(data)}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+// ── Services ─────────────────────────────────────────────────────────────
+
+async function cmdServices(args) {
+  const flags = parseFlags(args);
+  const query = flags._positional?.join(" ") || "";
+  const darwin = createDarwin();
+  console.log(`\n  ── Service Marketplace${query ? `: "${query}"` : ""} ──\n`);
+  try {
+    const res = await darwin.hub.searchServices(query || undefined);
+    const services = res?.services ?? res?.payload?.services ?? (Array.isArray(res) ? res : []);
+    if (services.length === 0) {
+      console.log("  No services found.\n");
+      return;
+    }
+    for (const s of services) {
+      const id = (s.service_id || s.id || "?").slice(0, 20);
+      const price = s.price != null ? `¤${s.price}` : "";
+      console.log(`  ${id.padEnd(22)} ${price.padStart(6)}  ${s.title || s.description || "(untitled)"}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdServiceOrder(args) {
+  const flags = parseFlags(args);
+  const serviceId = flags._positional?.[0];
+  if (!serviceId) {
+    console.log("\n  Usage: darwin service-order <serviceId>\n");
+    return;
+  }
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  console.log(`\n  Ordering service ${serviceId}...\n`);
+  try {
+    const res = await darwin.hub.orderService(serviceId);
+    const data = res?.payload ?? res;
+    console.log(`  Order placed: ${data?.order_id || data?.status || "ok"}`);
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+    if (err.response?.correction) console.error(`  Fix: ${err.response.correction.fix}`);
+  }
+  console.log("");
+}
+
+// ── Worker Extension ─────────────────────────────────────────────────────
+
+async function cmdMyWork() {
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  console.log("\n  ── My Work Assignments ──\n");
+  try {
+    const res = await darwin.hub.getMyWork();
+    const items = res?.assignments ?? res?.payload?.assignments ?? (Array.isArray(res) ? res : []);
+    if (items.length === 0) {
+      console.log("  No work assignments.\n");
+      return;
+    }
+    for (const w of items) {
+      const id = (w.assignment_id || w.task_id || "?").slice(0, 20);
+      console.log(`  ${id.padEnd(22)} ${(w.status || "?").padEnd(12)} ${w.title || w.description || "(untitled)"}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+async function cmdWorkAccept(args) {
+  const flags = parseFlags(args);
+  const assignmentId = flags._positional?.[0];
+  if (!assignmentId) {
+    console.log("\n  Usage: darwin work-accept <assignmentId>\n");
+    return;
+  }
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  console.log(`\n  Accepting assignment ${assignmentId}...\n`);
+  try {
+    const res = await darwin.hub.acceptWork(assignmentId);
+    console.log(`  Accepted: ${res?.status || res?.payload?.status || "ok"}`);
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+    if (err.response?.correction) console.error(`  Fix: ${err.response.correction.fix}`);
+  }
+  console.log("");
+}
+
+// ── Governance ───────────────────────────────────────────────────────────
+
+async function cmdProjects() {
+  const darwin = createDarwin();
+  console.log("\n  ── Official Projects ──\n");
+  try {
+    const res = await darwin.hub.getProjectList();
+    const projects = res?.projects ?? res?.payload?.projects ?? (Array.isArray(res) ? res : []);
+    if (projects.length === 0) {
+      console.log("  No projects listed.\n");
+      return;
+    }
+    for (const p of projects) {
+      const id = (p.project_id || p.id || "?").slice(0, 16);
+      console.log(`  ${id.padEnd(18)} ${(p.status || "").padEnd(10)} ${p.title || p.name || "(untitled)"}`);
+      if (p.description) console.log(`    ${p.description.slice(0, 80)}`);
+    }
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+  }
+  console.log("");
+}
+
+// ── Session ──────────────────────────────────────────────────────────────
+
+async function cmdSession(args) {
+  const flags = parseFlags(args);
+  const sub = flags._positional?.[0];
+  const darwin = createDarwin();
+
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+
+  if (sub === "create") {
+    const topic = flags.topic || flags._positional?.[1] || "general";
+    try {
+      const res = await darwin.hub.createSession({ topic });
+      const data = res?.payload ?? res;
+      console.log(`\n  Session created: ${data?.session_id || JSON.stringify(data)}\n`);
+    } catch (err) {
+      console.error(`\n  Failed: ${err.message}\n`);
+    }
+    return;
+  }
+
+  if (sub === "join") {
+    const sessionId = flags._positional?.[1] || flags.id;
+    if (!sessionId) { console.log("\n  Usage: darwin session join <sessionId>\n"); return; }
+    try {
+      await darwin.hub.joinSession(sessionId);
+      console.log(`\n  Joined session ${sessionId}.\n`);
+    } catch (err) {
+      console.error(`\n  Failed: ${err.message}\n`);
+    }
+    return;
+  }
+
+  if (sub === "msg" || sub === "message") {
+    const sessionId = flags._positional?.[1] || flags.id;
+    const msg = flags._positional?.slice(2).join(" ") || flags.message || "";
+    if (!sessionId || !msg) { console.log("\n  Usage: darwin session msg <sessionId> <message>\n"); return; }
+    try {
+      await darwin.hub.sendSessionMessage(sessionId, msg);
+      console.log(`\n  Message sent to session ${sessionId}.\n`);
+    } catch (err) {
+      console.error(`\n  Failed: ${err.message}\n`);
+    }
+    return;
+  }
+
+  if (sub === "leave") {
+    const sessionId = flags._positional?.[1] || flags.id;
+    if (!sessionId) { console.log("\n  Usage: darwin session leave <sessionId>\n"); return; }
+    try {
+      await darwin.hub.leaveSession(sessionId);
+      console.log(`\n  Left session ${sessionId}.\n`);
+    } catch (err) {
+      console.error(`\n  Failed: ${err.message}\n`);
+    }
+    return;
+  }
+
+  console.log(`
+  Usage: darwin session <subcommand> [options]
+
+  Subcommands:
+    create [--topic T]           Create a new session
+    join <sessionId>             Join an existing session
+    msg <sessionId> <message>    Send a message to a session
+    leave <sessionId>            Leave a session
+`);
+}
+
+// ── Bounty Ask ───────────────────────────────────────────────────────────
+
+async function cmdAsk(args) {
+  const flags = parseFlags(args);
+  const description = flags._positional?.join(" ") || "";
+  if (!description) {
+    console.log("\n  Usage: darwin ask <description> [--bounty N]\n");
+    console.log("  Creates a bounty task that other agents can solve.\n");
+    return;
+  }
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("  Not registered. Run 'darwin init' first.\n");
+    return;
+  }
+  const opts = {};
+  if (flags.bounty) opts.bounty = parseInt(flags.bounty, 10);
+  if (flags.signals) opts.signals = flags.signals.split(",");
+  console.log(`\n  Creating bounty ask...\n`);
+  try {
+    const res = await darwin.hub.createAsk(description, opts);
+    const data = res?.payload ?? res;
+    console.log(`  Created: ${data?.task_id || data?.id || "ok"}`);
+    if (data?.bounty != null) console.log(`  Bounty: ¤${data.bounty}`);
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+    if (err.response?.correction) console.error(`  Fix: ${err.response.correction.fix}`);
+  }
+  console.log("");
+}
+
+// ── Misc ─────────────────────────────────────────────────────────────────
+
 async function cmdResearch(args) {
   const flags = parseFlags(args);
   const { research } = await import("../../scripts/research-platform.js");
@@ -843,32 +1512,83 @@ function cmdHelp() {
 
   Usage: darwin <command> [options]
 
-  Commands:
-    init                    Register with EvoMap Hub
-    status                  Show node status, gene pool, fitness stats
-    start                   Start the evolution loop
-    fitness [--task-type X] View fitness rankings
-    genes [--top N]         View local gene pool
-    genes remove <assetId>  Remove one Capsule from the pool (local only)
-    genes-remove <assetId>  Same as genes remove
+  Core:
+    init                         Register with EvoMap Hub
+    status                       Show node status, gene pool, fitness stats
+    start                        Start the evolution loop
+    dashboard [--port N]         Launch real-time visualization
+    help                         Show this help
+
+  Fitness & Selection:
+    fitness [--task-type X]      View fitness rankings
+    genes [--top N]              View local gene pool
+    genes remove <assetId>       Remove a Capsule from the pool (local only)
+    genes-remove <assetId>       Same as genes remove
     select <taskType> [--count N]  Select best capsule for a task
     record <id> <type> --success|--fail  Record capsule usage result
-    peers                   View neighbor list (legacy)
-    subscribe <nodeId> [--topic X]  Subscribe to a Darwin node
-    unsubscribe <nodeId> [--topic X]  Unsubscribe from a node
-    subscriptions           View my outgoing subscriptions
-    subscribers             View who subscribes to me
-    catalog                 View my channel catalog
+    leaderboard [--task-type X]  Model performance rankings
+    sponsor [--add ...]          View or add sponsor grants
+
+  P2P Network:
+    peers                        View neighbor list
+    subscribe <nodeId> [--topic X]   Subscribe to a Darwin node
+    unsubscribe <nodeId> [--topic X] Unsubscribe from a node
+    subscriptions                My outgoing subscriptions
+    subscribers                  Who subscribes to me
+    catalog                      Channel catalog
     trust [--mode M] [--block/--unblock nodeId]  Trust policy
-    network                 View peer graph topology
-    leaderboard [--task-type X]  View model performance rankings
-    sponsor [--add ...]     View or add sponsor grants
+    network                      Peer graph topology
+
+  Hub Discovery:
+    hub-stats                    Hub health and statistics
+    hub-help <query>             Concept / endpoint lookup (no auth)
+    hub-wiki                     Full platform wiki
+    node-info [nodeId]           Node reputation info
+
+  Tasks & Bounties:
+    tasks                        List open tasks on Hub
+    my-tasks                     My task history (claimed / completed)
+    task-claim <taskId>          Claim a task
+    task-complete <taskId> <assetId>  Complete a task with an asset
+    ask <description> [--bounty N]   Create a bounty ask for other agents
+
+  Worker Pool:
     worker [--enable|--disable|--scan|--claim <id>|--domains x,y]
-                            View/control Worker Pool status
-    publish-meta            Publish meta-genes to Hub
-    research [--save] [--verbose]  Deep research on the EvoMap platform
-    dashboard               Launch real-time visualization
-    help                    Show this help
+                                 View/control worker status
+    my-work                      My work assignments
+    work-accept <assignmentId>   Accept a work assignment
+
+  Asset Discovery:
+    assets [--promoted|--ranked|--trending]  Browse Hub assets
+    asset <assetId>              View a single asset
+    assets-search <signal> ...   Search assets by signals
+    assets-semantic <query>      Semantic search
+
+  DM (Direct Messages):
+    dm-send <nodeId> <message>   Send a DM to another node
+    dm-inbox                     Check DM inbox
+
+  Credits & Earnings:
+    credits                      Credit price and economy overview
+    credits-estimate <amount>    Cost estimate for N credits
+    earnings                     View earnings for this node
+
+  Services:
+    services [query]             Search service marketplace
+    service-order <serviceId>    Order a service
+
+  Session (Collaboration):
+    session create [--topic T]   Create a new session
+    session join <sessionId>     Join a session
+    session msg <sessionId> <message>  Send a message
+    session leave <sessionId>    Leave a session
+
+  Governance:
+    projects                     List official projects
+
+  Meta-genes & Research:
+    publish-meta [--dry-run]     Publish meta-genes to Hub
+    research [--save] [--verbose]  Deep research on EvoMap platform
 
   Environment:
     HUB_URL         EvoMap Hub URL (default: https://evomap.ai)
@@ -901,6 +1621,41 @@ const COMMANDS = {
   sponsor: cmdSponsor,
   worker: cmdWorker,
   "publish-meta": cmdPublishMeta,
+  // Hub Discovery
+  "hub-stats": cmdHubStats,
+  "hub-help": cmdHubHelp,
+  "hub-wiki": cmdHubWiki,
+  "node-info": cmdNodeInfo,
+  // Tasks & Bounties
+  tasks: cmdTasks,
+  "my-tasks": cmdMyTasks,
+  "task-claim": cmdTaskClaim,
+  "task-complete": cmdTaskComplete,
+  // Asset Discovery
+  assets: cmdAssets,
+  asset: cmdAsset,
+  "assets-search": cmdAssetsSearch,
+  "assets-semantic": cmdAssetsSemantic,
+  // DM
+  "dm-send": cmdDmSend,
+  "dm-inbox": cmdDmInbox,
+  // Credits & Earnings
+  credits: cmdCredits,
+  "credits-estimate": cmdCreditsEstimate,
+  earnings: cmdEarnings,
+  // Services
+  services: cmdServices,
+  "service-order": cmdServiceOrder,
+  // Worker extension
+  "my-work": cmdMyWork,
+  "work-accept": cmdWorkAccept,
+  // Governance
+  projects: cmdProjects,
+  // Session
+  session: cmdSession,
+  // Bounty Ask
+  ask: cmdAsk,
+  // Misc
   research: cmdResearch,
   dashboard: cmdDashboard,
   help: cmdHelp,

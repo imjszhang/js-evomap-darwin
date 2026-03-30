@@ -2,9 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- **Hub Discovery CLI**: `darwin hub-stats`, `darwin hub-help <query>`, `darwin hub-wiki`, `darwin node-info [nodeId]` — query Hub health, look up concepts/endpoints via the Help API, read full wiki, and check node reputation directly from the CLI
+- **Tasks & Bounties CLI**: `darwin tasks`, `darwin my-tasks`, `darwin task-claim <taskId>`, `darwin task-complete <taskId> <assetId>`, `darwin ask <description>` — full lifecycle of Hub bounty tasks (list, claim, complete, create) from the CLI
+- **Asset Discovery CLI**: `darwin assets [--promoted|--ranked|--trending]`, `darwin asset <assetId>`, `darwin assets-search <signals>`, `darwin assets-semantic <query>` — browse, inspect, and search Hub assets
+- **DM CLI**: `darwin dm-send <nodeId> <message>`, `darwin dm-inbox` — send and receive direct messages between nodes
+- **Credits & Earnings CLI**: `darwin credits`, `darwin credits-estimate <amount>`, `darwin earnings` — credit economy overview, cost estimates, and earnings
+- **Services CLI**: `darwin services [query]`, `darwin service-order <serviceId>` — search and order from the service marketplace
+- **Worker extension CLI**: `darwin my-work`, `darwin work-accept <assignmentId>` — view and accept work assignments
+- **Session CLI**: `darwin session <create|join|msg|leave>` — manage collaboration sessions
+- **Governance CLI**: `darwin projects` — list official EvoMap projects
+- **Bounty Ask CLI**: `darwin ask <description> [--bounty N]` — create bounty tasks for other agents
+- **HubClient**: `getCreditPrice()`, `getCreditEstimate()`, `getCreditEconomics()`, `getEarnings()`, `createAsk()`, `orderService()` — new methods for credit economy, bounty asks, and service ordering
+- **OpenClaw plugin tools**: `darwin_hub_stats`, `darwin_hub_help`, `darwin_node_info`, `darwin_tasks`, `darwin_my_tasks`, `darwin_task_claim`, `darwin_task_complete`, `darwin_ask`, `darwin_assets`, `darwin_assets_search`, `darwin_dm_send`, `darwin_dm_inbox`, `darwin_credits`, `darwin_earnings`, `darwin_services`, `darwin_session`, `darwin_projects` — 17 new agent tools covering Hub discovery, tasks, assets, DM, credits, services, sessions, and governance
+
 ### Changed
 
-- **Documentation**: `README.md` and `SKILL.md` aligned with `README.zh-CN.md`—Revolution framing, four meta-genes vs platform monopolies, heartbeat and evolution loops, four-stage evolve cycle (fetch → Agent/Mutator → Subscription → TaskMatcher), `recordUsage` entry points and Hub validation reporting, Agent-first evolution with `darwin_think` / `darwin_select` / `darwin_record`, gene ingestion safeguards, plain-vs-Darwin comparison and core-module tables, architecture diagram, design principles, Subscription/TaskMatcher-first library and CLI examples, and OpenClaw tool list (plus `darwin_worker`, `darwin_subscribe`, `darwin_catalog`).
+- **CLI help**: reorganized into domain groups (Core, Fitness & Selection, P2P Network, Hub Discovery, Tasks & Bounties, Worker Pool, Asset Discovery, DM, Credits & Earnings, Services, Session, Governance, Meta-genes & Research)
+- **Documentation**: `README.md`, `README.zh-CN.md`, and `SKILL.md` updated with all new CLI commands, OpenClaw tools (grouped by domain), expanded architecture diagrams, and full CLI command reference; `README.zh-CN.md` now includes CLI commands section aligned with `README.md`
 
 ## 0.2.0
 

@@ -379,6 +379,44 @@ export class HubClient {
     return this.#get("/a2a/project/list");
   }
 
+  // ── Credits & Earnings ─────────────────────────────────────────────
+
+  async getCreditPrice() {
+    return this.#get("/a2a/credit/price");
+  }
+
+  async getCreditEstimate(amount) {
+    return this.#get(`/a2a/credit/estimate?amount=${encodeURIComponent(amount)}`);
+  }
+
+  async getCreditEconomics() {
+    return this.#get("/a2a/credit/economics");
+  }
+
+  async getEarnings() {
+    return this.#get(`/billing/earnings/${encodeURIComponent(this.#nodeId)}`);
+  }
+
+  // ── Bounty Ask ─────────────────────────────────────────────────────
+
+  async createAsk(description, opts = {}) {
+    return this.#fetch("/a2a/ask", {
+      sender_id: this.#nodeId,
+      description,
+      ...opts,
+    });
+  }
+
+  // ── Service Order ──────────────────────────────────────────────────
+
+  async orderService(serviceId, opts = {}) {
+    return this.#fetch("/a2a/service/order", {
+      sender_id: this.#nodeId,
+      service_id: serviceId,
+      ...opts,
+    });
+  }
+
   // ── Help / Wiki ──────────────────────────────────────────────────────
 
   async getHelp(query) {
