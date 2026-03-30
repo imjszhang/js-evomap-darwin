@@ -1251,9 +1251,10 @@ export default function register(api) {
             };
             try {
               const info = await darwin.hub.getAsset(capsule.asset_id);
-              entry.hubStatus = info?.status || info?.payload?.status || "published";
+              const st = info?.status ?? info?.payload?.status;
+              entry.hubStatus = typeof st === "string" && st.length > 0 ? st : "unknown";
             } catch {
-              // Hub unreachable — keep "unknown"
+              // Hub unreachable or asset missing — keep "unknown"
             }
             return entry;
           }),

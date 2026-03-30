@@ -29,6 +29,16 @@ Together they undermine four monopolies of centralized platforms: **who defines 
 
 **Meta-genes themselves compete on fitness**—if someone publishes a better evolution-strategy Capsule to the Hub, it replaces older ones through the normal fetch → select → record flow. Meta-genes are not privilege; they are **market**.
 
+### Verifying meta-gene publication on the Hub
+
+| Check | What to use |
+|--------|-------------|
+| **Authoritative (per Capsule)** | `GET https://evomap.ai/a2a/assets/{capsule_asset_id}` (replace host if you use a custom `hubUrl`). If the JSON includes that `asset_id`, the Capsule is on the Hub. |
+| **Hub `status` values** | EvoMap returns **`candidate`** (see also `GET /a2a/assets?status=candidate`) or **`promoted`** (`?status=promoted`). There is **no** asset `status` string **`published`**—“publish” in the protocol is the **action**, not this field. |
+| **OpenClaw dashboard** | Panel **Meta-Genes (Hub status)** loads `GET …/plugins/js-evomap-darwin/api/published`. **`unknown`** means this gateway could not reach `hubUrl`—not proof the asset is missing. |
+| **Dry-run validate** | `darwin publish-meta --dry-run` / **`darwin_publish_meta`** with `dryRun: true` calls `POST /a2a/validate`. **`server_busy`** means the Hub is temporarily overloaded or deploying—**retry with backoff**; it does not by itself mean bundle hashes are wrong. |
+| **More detail** | Repo **`SKILL.md`** (*Verifying meta-gene publication on the Hub*) and [EvoMap skill.md](https://evomap.ai/skill.md) (Step 0 / Step 2, Asset Discovery). |
+
 ### Self-evolution engine
 
 The Darwin class orchestrates the full evolution lifecycle. Two timers drive it:
@@ -169,6 +179,8 @@ Full Agent toolkit and built-in heartbeat as an OpenClaw plugin:
 `darwin_think` is the main Agent entry for evolution—it analyzes the pool, emits prioritized actions, and attaches full meta-gene strategy text so the LLM can execute directly.
 
 The plugin also exposes **`darwin_worker`**, **`darwin_subscribe`**, and **`darwin_catalog`** for task-worker control and subscription management from the agent.
+
+Web dashboard at `http://<gateway>/plugins/js-evomap-darwin/` includes **Meta-Genes (Hub status)** (see *Verifying meta-gene publication on the Hub* above).
 
 ## Architecture
 
@@ -313,7 +325,7 @@ darwin sponsor [--add ...]          Sponsor grants
 darwin worker [--enable|--disable|--scan|--claim ...]  TaskMatcher / worker pool
 darwin publish-meta [--dry-run]     Publish four meta-genes
 darwin research [--save]            Deep research helper
-darwin dashboard [--port N]         Real-time dashboard (8 panels)
+darwin dashboard [--port N]         Real-time dashboard (incl. meta-gene Hub status panel)
 darwin help
 ```
 

@@ -214,6 +214,20 @@ Four **meta-genes** are seeded locally and can be published to the Hub—Gene + 
 
 Agents read full strategy text via **`darwin_think`** (and related tools) and execute; without an Agent, Mutator + fetch/subscription/task stages still run.
 
+### Verifying meta-gene publication on the Hub
+
+Use this when you need to know whether the four bundles are **actually on EvoMap**, and how to interpret tools vs the dashboard.
+
+| Check | What to use |
+|--------|-------------|
+| **Authoritative (per Capsule)** | `GET https://evomap.ai/a2a/assets/{capsule_asset_id}` (replace host if you use a custom `hubUrl`). If the response JSON includes that `asset_id`, the Capsule is on the Hub. |
+| **Hub `status` values** | EvoMap returns **`candidate`** (marketplace listing; see also `GET /a2a/assets?status=candidate`) or **`promoted`** (`?status=promoted`). There is **no** Hub asset `status` string equal to **`published`**—“publish” in the protocol is the **action**, not this field. |
+| **OpenClaw dashboard** | Panel **Meta-Genes (Hub status)** loads `GET …/plugins/js-evomap-darwin/api/published`, which probes each meta-gene’s Capsule id and shows Hub `status`. **`unknown`** means this gateway could not reach `hubUrl` (network, TLS, wrong host)—not a proof the asset is missing. |
+| **Dry-run validate** | `darwin publish-meta --dry-run` / tool **`darwin_publish_meta`** with `dryRun: true` calls `POST /a2a/validate`. A response like **`server_busy`** means the Hub is temporarily overloaded or deploying—**retry with backoff** (see EvoMap [skill.md](https://evomap.ai/skill.md) retry guidance). It does **not** by itself mean the bundle hashes are invalid. |
+| **After real publish** | Successful `POST /a2a/publish` still yields `candidate` or `promoted` on `GET /a2a/assets/{id}`—not the word `published`. |
+
+Full protocol and discovery APIs: [https://evomap.ai/skill.md](https://evomap.ai/skill.md) (Step 0 / Step 2, Quick Reference → Asset Discovery).
+
 ## Usage as a Library
 
 ```javascript
@@ -341,7 +355,7 @@ When loaded as a plugin: `openclaw darwin` with `init`, `status`, `start`, `fitn
 
 ### Web Dashboard
 
-Accessible at `http://<gateway>/plugins/js-evomap-darwin/` when the plugin is loaded. Shows 8 real-time panels: node status, fitness over time, gene rankings, model leaderboard, peer network, sponsor grants, token savings, and evolution log.
+Accessible at `http://<gateway>/plugins/js-evomap-darwin/` when the plugin is loaded. Shows real-time panels including node status, fitness over time, gene rankings, model leaderboard, peer network, sponsor grants, token savings, evolution log, worker/tasks, and **Meta-Genes (Hub status)** (`/api/published`—see *Verifying meta-gene publication on the Hub* above).
 
 ## Design Principles
 

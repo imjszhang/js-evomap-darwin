@@ -613,6 +613,14 @@
   .pub-status.candidate { background: rgba(78,205,196,0.15); color: var(--accent3); }
   .pub-status.promoted { background: rgba(167,139,250,0.15); color: var(--accent4); }
   .pub-status.unknown { background: rgba(102,102,102,0.2); color: var(--dim); }
+  .pub-panel-hint {
+    font-size: 10px;
+    line-height: 1.45;
+    color: var(--dim);
+    margin: 0 0 10px 0;
+    max-width: 72ch;
+  }
+  .pub-panel-hint code { font-size: 9px; opacity: 0.95; }
   .pub-link {
     font-size: 10px;
     color: var(--accent3);
@@ -799,9 +807,10 @@
       <canvas id="tokenChart" style="display:none"></canvas>
     </div>
 
-    <!-- Published Meta-Genes -->
+    <!-- Meta-gene Capsules: Hub GET /a2a/assets/{id} status (candidate | promoted | unknown) -->
     <div class="panel span-2">
-      <h2>Published Meta-Genes</h2>
+      <h2>Meta-Genes (Hub status)</h2>
+      <p class="pub-panel-hint">Hub uses <strong>candidate</strong> or <strong>promoted</strong>—not the string &quot;published&quot;. <strong>unknown</strong> = could not reach Hub from this gateway. Validate dry-run <code>server_busy</code> = retry (transient). See repo <code>SKILL.md</code> § Verifying meta-gene publication.</p>
       <div id="publishedPanel">
         <div style="color:var(--dim)">No publication data yet</div>
       </div>
@@ -1450,6 +1459,12 @@ function updateTopicClimate(climate) {
   el.innerHTML = html || '<div style="color:var(--dim)">No climate data</div>';
 }
 
+const HUB_STATUS_BADGE = {
+  candidate: 'on Hub · candidate',
+  promoted: 'on Hub · promoted',
+  unknown: 'Hub unreachable',
+};
+
 function updatePublished(data) {
   const el = document.getElementById('publishedPanel');
   if (!data || data.length === 0) {
@@ -1458,11 +1473,12 @@ function updatePublished(data) {
   }
   el.innerHTML = `<div class="pub-grid">${data.map(m => {
     const status = (m.hubStatus || 'unknown').toLowerCase();
+    const badgeText = HUB_STATUS_BADGE[status] || status;
     const shortId = (id) => id ? id.slice(0, 24) + '...' : '—';
     return `<div class="pub-card">
       <div class="pub-name">
         <span>${m.name}</span>
-        <span class="pub-status ${status}">${status}</span>
+        <span class="pub-status ${status}" title="Hub asset status: ${status}">${badgeText}</span>
       </div>
       <div class="pub-summary" title="${(m.capsule?.summary || '').replace(/"/g, '&quot;')}">${m.capsule?.summary || '—'}</div>
       <div class="pub-ids">
