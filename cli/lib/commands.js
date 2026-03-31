@@ -1,4 +1,5 @@
 import { Darwin } from "../../src/index.js";
+import { getAllMetaGenes } from "../../src/meta-genes.js";
 import { Mutator } from "../../src/mutator.js";
 import { PeerExchange } from "../../src/peer-exchange.js";
 import { Subscription } from "../../src/subscription.js";
@@ -211,8 +212,34 @@ async function cmdGenesRemove(args) {
   console.log(`  Pool:    ${darwin.store.size} / ${darwin.store.capacity}\n`);
 }
 
+async function cmdGenesDedupe(args) {
+  const flags = parseFlags(args);
+  const dryRun = flags.dryRun === true || flags["dry-run"] === true;
+  const darwin = createDarwin();
+  const preferred = new Set(
+    getAllMetaGenes().map(({ bundle }) => bundle[1]?.asset_id).filter(Boolean),
+  );
+  const { removed, groupsWithDuplicates } = darwin.store.deduplicateByContent({
+    preferredIds: preferred,
+    dryRun,
+  });
+  const mode = dryRun ? "Dry-run (no changes)" : "Removed";
+  console.log(`\n  ── Gene pool dedupe — ${mode} ──\n`);
+  console.log(`  Duplicate groups: ${groupsWithDuplicates}`);
+  console.log(`  Entries ${dryRun ? "would remove" : "removed"}: ${removed.length}`);
+  for (const id of removed) {
+    const short = id.length > 56 ? `${id.slice(0, 28)}...${id.slice(-12)}` : id;
+    console.log(`    ${short}`);
+  }
+  console.log(`\n  Pool: ${darwin.store.size} / ${darwin.store.capacity}\n`);
+}
+
 async function cmdGenes(args) {
   const flags = parseFlags(args);
+  if (flags._positional?.[0] === "dedupe") {
+    await cmdGenesDedupe(args.slice(1));
+    return;
+  }
   if (flags._positional?.[0] === "remove") {
     const raw = flags._positional[1] || flags.remove;
     if (!raw) {
@@ -1523,7 +1550,9 @@ function cmdHelp() {
     fitness [--task-type X]      View fitness rankings
     genes [--top N]              View local gene pool
     genes remove <assetId>       Remove a Capsule from the pool (local only)
+    genes dedupe [--dry-run]     Drop duplicate strategy bodies (same as repeated removes)
     genes-remove <assetId>       Same as genes remove
+    genes-dedupe [--dry-run]     Same as genes dedupe
     select <taskType> [--count N]  Select best capsule for a task
     record <id> <type> --success|--fail  Record capsule usage result
     leaderboard [--task-type X]  Model performance rankings
@@ -1607,6 +1636,7 @@ const COMMANDS = {
   fitness: cmdFitness,
   genes: cmdGenes,
   "genes-remove": cmdGenesRemove,
+  "genes-dedupe": cmdGenesDedupe,
   select: cmdSelect,
   record: cmdRecord,
   peers: cmdPeers,

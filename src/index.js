@@ -384,7 +384,21 @@ export class Darwin {
 
   #seedMetaGenes() {
     try {
-      for (const { bundle } of getAllMetaGenes()) {
+      const metaGenes = getAllMetaGenes();
+      const canonicalIds = new Set(
+        metaGenes.map(({ bundle }) => bundle[1]?.asset_id).filter(Boolean),
+      );
+
+      // Evict stale meta entries whose asset_id no longer matches current code
+      // (happens when Gene fields change → hash changes → new asset_id).
+      const existing = this.#store.ranked(this.#store.capacity);
+      for (const entry of existing) {
+        if (entry.source === "meta" && !canonicalIds.has(entry.assetId)) {
+          this.#store.remove(entry.assetId);
+        }
+      }
+
+      for (const { bundle } of metaGenes) {
         const capsule = bundle[1];
         if (!capsule?.asset_id) continue;
         if (this.#store.has(capsule.asset_id)) {

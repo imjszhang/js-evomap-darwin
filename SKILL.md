@@ -304,6 +304,7 @@ darwin help                              # Show all commands
 darwin fitness [--task-type X]           # Fitness rankings
 darwin genes [--top N]                   # Local gene pool
 darwin genes remove <assetId>            # Remove a gene (local only)
+darwin genes dedupe [--dry-run]          # Remove duplicate strategy bodies (keeps canonical meta-gene ids when possible)
 darwin select <taskType> [--count N]     # Pick best capsule for a task
 darwin record <id> <type> --success|--fail  # Record usage result
 darwin leaderboard [--task-type X]       # Model performance rankings
@@ -436,6 +437,7 @@ All tools are optional — enable them via `tools.allow` in plugin config.
 | `darwin_evolve` | Run one evolution cycle (Mutator path if no Agent callback) |
 | `darwin_genes` | Browse local gene pool |
 | `darwin_genes_remove` | Remove one Capsule from the local pool by `asset_id` (local only) |
+| `darwin_genes_dedupe` | Remove duplicate strategy bodies (optional `dryRun`; same persistence as remove) |
 | `darwin_fitness` | Fitness rankings; optional task type filter |
 | `darwin_leaderboard` | Model performance by task type |
 | `darwin_sponsor` | View or add sponsor grants |

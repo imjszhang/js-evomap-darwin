@@ -130,6 +130,36 @@ export class GeneStore {
   }
 
   /**
+   * Remove Capsules that share the same strategy body (summary, content, strategy, triggers).
+   * Uses the same persistence path as remove(). When preferredIds is set (e.g. current meta-gene
+   * capsule ids), keeps that row if present; otherwise keeps highest fitness, then newest addedAt.
+   * @param {{ preferredIds?: Set<string>, dryRun?: boolean }} [options]
+   * @returns {{ removed: string[], groupsWithDuplicates: number }}
+   */
+  deduplicateByContent({ preferredIds = null, dryRun = false } = {}) {
+    const all = this.ranked(this.#capacity);
+    const groups = new Map();
+    for (const entry of all) {
+      const fp = this.#capsuleBodyFingerprint(entry.capsule);
+      if (!groups.has(fp)) groups.set(fp, []);
+      groups.get(fp).push(entry);
+    }
+    const removed = [];
+    let groupsWithDuplicates = 0;
+    for (const [, entries] of groups) {
+      if (entries.length < 2) continue;
+      groupsWithDuplicates++;
+      const keeper = this.#pickDuplicateKeeper(entries, preferredIds);
+      for (const e of entries) {
+        if (e.assetId === keeper.assetId) continue;
+        if (!dryRun) this.remove(e.assetId);
+        removed.push(e.assetId);
+      }
+    }
+    return { removed, groupsWithDuplicates };
+  }
+
+  /**
    * Return stats for the dashboard.
    */
   getStats() {
@@ -174,6 +204,47 @@ export class GeneStore {
   }
 
   // ── Private ───────────────────────────────────────────────────────────
+
+  #capsuleBodyFingerprint(capsule) {
+    if (!capsule || typeof capsule !== "object") return "";
+    const triggers = capsule.trigger || capsule.signals_match;
+    const trig = Array.isArray(triggers)
+      ? [...triggers].map(String).sort()
+      : triggers ?? null;
+    const strat = Array.isArray(capsule.strategy)
+      ? capsule.strategy.map(String)
+      : capsule.strategy ?? null;
+    return JSON.stringify({
+      summary: capsule.summary ?? "",
+      content: capsule.content ?? "",
+      strategy: strat,
+      trigger: trig,
+    });
+  }
+
+  #pickDuplicateKeeper(entries, preferredIds) {
+    if (preferredIds && preferredIds.size > 0) {
+      const preferred = entries.filter((e) => preferredIds.has(e.assetId));
+      if (preferred.length === 1) return preferred[0];
+      if (preferred.length > 1) {
+        return [...preferred].sort((a, b) => {
+          const fa = a.fitness ?? 0;
+          const fb = b.fitness ?? 0;
+          if (fb !== fa) return fb - fa;
+          return String(b.addedAt || "").localeCompare(String(a.addedAt || ""));
+        })[0];
+      }
+    }
+    return [...entries].sort((a, b) => {
+      const fa = a.fitness ?? 0;
+      const fb = b.fitness ?? 0;
+      if (fb !== fa) return fb - fa;
+      const ca = String(a.addedAt || "");
+      const cb = String(b.addedAt || "");
+      if (cb !== ca) return cb.localeCompare(ca);
+      return a.assetId.localeCompare(b.assetId);
+    })[0];
+  }
 
   #isValidCapsule(capsule) {
     if (!capsule || typeof capsule !== "object") return false;

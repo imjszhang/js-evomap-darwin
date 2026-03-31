@@ -164,12 +164,40 @@ function slimHeartbeatForInit(hb) {
   };
 }
 
-function buildFullSnapshot(darwin) {
+async function buildFullSnapshot(darwin) {
   const status = darwin.getStatus();
   const slimStatus = {
     ...status,
     heartbeat: slimHeartbeatForInit(status.heartbeat),
   };
+
+  let published = null;
+  try {
+    const { getAllMetaGenes } = await import(
+      pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "meta-genes.js")).href
+    );
+    const hubBase = darwin.hub.hubUrl || "https://evomap.ai";
+    published = await Promise.all(
+      getAllMetaGenes().map(async ({ name, bundle }) => {
+        const [gene, capsule, event] = bundle;
+        const entry = {
+          name,
+          gene: { assetId: gene.asset_id, summary: gene.summary },
+          capsule: { assetId: capsule.asset_id, summary: capsule.summary },
+          event: { assetId: event.asset_id },
+          hubStatus: "unknown",
+          hubUrl: `${hubBase}/a2a/assets/${encodeURIComponent(capsule.asset_id)}`,
+        };
+        try {
+          const info = await darwin.hub.getAsset(capsule.asset_id);
+          const st = info?.status ?? info?.payload?.status;
+          entry.hubStatus = typeof st === "string" && st.length > 0 ? st : "unknown";
+        } catch { /* Hub unreachable or asset missing */ }
+        return entry;
+      }),
+    );
+  } catch { /* best-effort */ }
+
   return {
     status: slimStatus,
     genes: darwin.store.ranked(15).map((g) => ({
@@ -192,7 +220,7 @@ function buildFullSnapshot(darwin) {
     revolution: darwin.getRevolutionStatus?.() ?? null,
     sponsor: status.sponsor,
     worker: status.worker,
-    published: null,
+    published,
     events: eventBuffer.slice(-30),
   };
 }
@@ -442,6 +470,53 @@ export default function register(api) {
         });
       } catch (err) {
         return textResult(`Gene remove failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_genes_dedupe",
+    label: "Darwin: Dedupe Gene Pool",
+    description:
+      "Remove local Capsules whose strategy body duplicates another entry (same as repeated darwin_genes_remove). " +
+      "Keeps the current meta-gene canonical asset_id when applicable, else highest fitness. Use dryRun to preview.",
+    parameters: {
+      type: "object",
+      properties: {
+        dryRun: {
+          type: "boolean",
+          description: "If true, only report which asset_ids would be removed (no writes).",
+        },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const { getAllMetaGenes } = await import(
+          pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "meta-genes.js")).href,
+        );
+        const preferred = new Set(
+          getAllMetaGenes().map(({ bundle }) => bundle[1]?.asset_id).filter(Boolean),
+        );
+        const dryRun = params?.dryRun === true;
+        const { removed, groupsWithDuplicates } = darwin.store.deduplicateByContent({
+          preferredIds: preferred,
+          dryRun,
+        });
+        if (!dryRun) {
+          broadcastDarwinStatus(darwin);
+          broadcastDarwinGenes(darwin);
+        }
+        return jsonResult({
+          dryRun,
+          groupsWithDuplicates,
+          removedCount: removed.length,
+          removed,
+          poolSize: darwin.store.size,
+          capacity: darwin.store.capacity,
+        });
+      } catch (err) {
+        return textResult(`Gene dedupe failed: ${err.message}`);
       }
     },
   }, { optional: true });
@@ -1469,7 +1544,7 @@ export default function register(api) {
       });
       try {
         const darwin = await getDarwin(pluginCfg);
-        sendSSE(res, "init", buildFullSnapshot(darwin));
+        sendSSE(res, "init", await buildFullSnapshot(darwin));
       } catch (err) {
         sendSSE(res, "error", { message: err.message });
       }
@@ -1997,6 +2072,17 @@ export default function register(api) {
         .action(async (assetId) => {
           const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
           await run("genes-remove", [assetId]);
+        });
+
+      darwin
+        .command("genes-dedupe")
+        .description("Remove duplicate strategy bodies from the gene pool (same as genes dedupe)")
+        .option("--dry-run", "List removals without writing gene-store.json")
+        .action(async (opts) => {
+          const { run } = await import(pathToFileURL(nodePath.join(PROJECT_ROOT, "cli", "lib", "commands.js")).href);
+          const args = [];
+          if (opts.dryRun) args.push("--dry-run");
+          await run("genes-dedupe", args);
         });
 
       darwin
