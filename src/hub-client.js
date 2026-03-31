@@ -197,8 +197,8 @@ export class HubClient {
   }
 
   async validate(assets) {
-    const body = this.#envelope("publish", { assets });
-    return this.#fetch("/a2a/validate", body);
+    const body = this.#envelope("validate", { assets });
+    return this.#withRetry(() => this.#fetch("/a2a/validate", body));
   }
 
   async report(targetAssetId, validationReport) {
