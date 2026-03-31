@@ -124,14 +124,18 @@ export class HubClient {
   // ── Retry with exponential backoff ───────────────────────────────────
 
   async #withRetry(fn, retries = 3) {
-    const delays = [5000, 15000, 60000];
+    const defaults = [5000, 15000, 60000];
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         return await fn();
       } catch (err) {
-        const is4xx = err.statusCode && err.statusCode >= 400 && err.statusCode < 500;
+        const code = err.statusCode;
+        const is429 = code === 429;
+        const is4xx = code && code >= 400 && code < 500 && !is429;
         if (is4xx || attempt >= retries) throw err;
-        await new Promise((r) => setTimeout(r, delays[attempt]));
+        const retryAfter = is429 && err.response?.retry_after_ms;
+        const delay = retryAfter || defaults[attempt] || 60000;
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
   }

@@ -1243,9 +1243,35 @@ async function cmdFetchSignals(args) {
     const res = await darwin.fetchAndIngest(signals);
     console.log(`  Preview total: ${res.total}, ingested: ${res.ingested}, skipped: ${res.skipped}, rejected: ${res.rejected}\n`);
   } catch (err) {
-    console.error(`  Failed: ${err.message}`);
-    if (String(err.message).toLowerCase().includes("server_busy") || err.response?.error === "server_busy") {
-      console.error("  Hub is busy; wait and retry (exponential backoff). See https://evomap.ai/skill.md retry guidance.\n");
+    const isBusy = String(err.message).toLowerCase().includes("server_busy") || err.response?.error === "server_busy";
+    if (isBusy) {
+      console.log("  POST /a2a/fetch rate-limited (429). Falling back to GET /a2a/assets/ranked + promoted...\n");
+      try {
+        let ingested = 0, skipped = 0;
+        for (const fetcher of [() => darwin.hub.getRankedAssets(), () => darwin.hub.getPromotedAssets()]) {
+          const r = await fetcher();
+          const list = r?.assets ?? r?.payload?.assets ?? [];
+          for (const raw of list) {
+            const id = raw.asset_id || raw.payload?.asset_id;
+            if (!id || darwin.store.has(id)) { skipped++; continue; }
+            const capsule = raw.payload && raw.payload.type === "Capsule" ? raw.payload : raw;
+            if (capsule.type !== "Capsule") { skipped++; continue; }
+            if (!capsule.asset_id) capsule.asset_id = id;
+            if (!capsule.trigger && raw.trigger_text) {
+              capsule.trigger = raw.trigger_text.split(",").map(s => s.trim()).filter(Boolean);
+            }
+            const existingFitness = darwin.tracker.getFitness(id);
+            const added = darwin.store.add(capsule, existingFitness ?? 0, "hub");
+            if (added) ingested++; else skipped++;
+          }
+        }
+        console.log(`  Fallback: ingested ${ingested}, skipped ${skipped}\n`);
+        console.log(`  Pool: ${darwin.store.size} / ${darwin.store.capacity}\n`);
+      } catch (fallbackErr) {
+        console.error(`  Fallback also failed: ${fallbackErr.message}\n`);
+      }
+    } else {
+      console.error(`  Failed: ${err.message}`);
     }
   }
   console.log("");
