@@ -25,6 +25,8 @@
     font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
     font-size: 13px;
     line-height: 1.5;
+    overflow-x: hidden;
+    max-width: 100vw;
   }
   .header {
     padding: 16px 24px;
@@ -32,6 +34,8 @@
     display: flex;
     align-items: center;
     gap: 14px;
+    max-width: 100vw;
+    overflow: hidden;
   }
   .header-avatar {
     width: 44px;
@@ -76,10 +80,14 @@
     gap: 1px;
     background: var(--border);
     min-height: calc(100vh - 61px);
+    max-width: 100vw;
+    overflow: hidden;
   }
   .panel {
     background: var(--surface);
     padding: 16px 20px;
+    overflow: hidden;
+    min-width: 0;
   }
   .panel h2 {
     font-size: 11px;
@@ -106,6 +114,7 @@
     padding: 4px 0;
     border-bottom: 1px solid var(--border);
     font-size: 12px;
+    min-width: 0;
   }
   .gene-row .fitness {
     min-width: 48px;
@@ -118,7 +127,8 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 180px;
+    max-width: 30%;
+    flex-shrink: 1;
   }
   .gene-row .summary {
     flex: 1;
@@ -195,6 +205,7 @@
     border-bottom: 1px solid var(--border);
     font-size: 12px;
     align-items: center;
+    min-width: 0;
   }
   .model-row .rank {
     min-width: 24px;
@@ -202,9 +213,14 @@
     text-align: right;
   }
   .model-row .model-name {
-    min-width: 100px;
+    min-width: 0;
+    max-width: 120px;
     font-weight: 600;
     color: var(--accent3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .model-row .bar-container {
     flex: 1;
@@ -219,10 +235,14 @@
     transition: width 0.5s ease;
   }
   .model-row .stats {
-    min-width: 160px;
+    min-width: 0;
+    flex-shrink: 0;
     text-align: right;
     color: var(--dim);
     font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .grant-card {
     padding: 8px 12px;
@@ -399,6 +419,7 @@
     border-bottom: 1px solid var(--border);
     font-size: 12px;
     align-items: center;
+    min-width: 0;
   }
   .match-row .score {
     min-width: 44px;
@@ -507,6 +528,7 @@
     display: flex;
     gap: 16px;
     align-items: center;
+    flex-wrap: wrap;
   }
   .rev-gauge { display: flex; flex-direction: column; align-items: center; flex-shrink: 0; width: 120px; }
   .rev-gauge canvas { width: 110px; height: 110px; }
@@ -523,7 +545,7 @@
     color: var(--dim);
     margin-top: 2px;
   }
-  .rev-dimensions { display: flex; flex-direction: column; gap: 10px; flex: 1; min-width: 0; overflow: hidden; }
+  .rev-dimensions { display: flex; flex-direction: column; gap: 10px; flex: 1 1 200px; min-width: 0; overflow: hidden; }
   .rev-dim-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
   .rev-dim-label { min-width: 74px; color: var(--dim); text-transform: uppercase; font-size: 10px; letter-spacing: 1px; flex-shrink: 0; }
   .rev-dim-bar { flex: 1; min-width: 0; height: 14px; background: var(--border); border-radius: 3px; overflow: hidden; }
@@ -548,7 +570,7 @@
   .source-tag.meta { background: rgba(255,107,53,0.15); color: var(--accent2); }
   .pub-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     gap: 10px;
   }
   .pub-card {
@@ -586,6 +608,10 @@
   .pub-card .pub-id-row .pub-hash {
     font-family: inherit;
     opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
   .pub-card .pub-summary {
     font-size: 11px;
@@ -653,6 +679,25 @@
   .tag.revolution { background: var(--accent); color: var(--bg); }
   .tag.evolving { background: var(--accent3); color: var(--bg); }
   .tag.dependent { background: var(--accent2); color: var(--bg); }
+
+  @media (max-width: 720px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+    .panel.span-2 {
+      grid-column: span 1;
+    }
+    .rev-panel-inner {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .rev-gauge, .rev-pie {
+      width: auto;
+      flex-direction: row;
+      align-items: center;
+      gap: 12px;
+    }
+  }
 </style>
 </head>
 <body>
