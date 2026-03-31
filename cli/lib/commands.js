@@ -977,7 +977,9 @@ async function cmdTasks() {
       const id = (t.task_id || t.id || "?").slice(0, 20);
       const bounty = t.bounty != null ? `¤${t.bounty}` : "";
       console.log(`  ${id.padEnd(22)} ${(t.status || "open").padEnd(10)} ${bounty.padStart(6)}  ${t.title || t.description || "(untitled)"}`);
-      if (t.signals?.length) console.log(`    signals: ${t.signals.join(", ")}`);
+      const sigs = t.signals;
+      const sigLine = Array.isArray(sigs) ? sigs.join(", ") : typeof sigs === "string" ? sigs : "";
+      if (sigLine) console.log(`    signals: ${sigLine}`);
     }
   } catch (err) {
     console.error(`  Failed: ${err.message}`);
