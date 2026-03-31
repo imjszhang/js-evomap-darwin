@@ -1674,7 +1674,8 @@ function renderTaskCard(t) {
     </div>`;
   }
 
-  if (t.validateOk != null || t.publishOk != null || isCompleted || isFailed) {
+  const hasLocalTracking = t.validateOk != null || t.publishOk != null;
+  if (hasLocalTracking) {
     detailHtml += `<div class="at-steps">
       ${renderStepIcon(true, 'claim')}
       <span class="at-step-arrow">&#8594;</span>
@@ -1683,6 +1684,10 @@ function renderTaskCard(t) {
       ${renderStepIcon(t.publishOk, 'publish')}
       <span class="at-step-arrow">&#8594;</span>
       ${renderStepIcon(isCompleted ? true : isFailed ? false : null, 'complete')}
+    </div>`;
+  } else if (t.taskSource === 'hub' && (isCompleted || isFailed)) {
+    detailHtml += `<div class="at-steps">
+      <span class="at-step pending">Hub ${isCompleted ? 'completed' : 'expired'}</span>
     </div>`;
   }
 
@@ -1754,8 +1759,24 @@ function updateMyTasks(data) {
   const { hubActive, hubCompleted } = hubMyTasksToDisplayLists(data.hubMyTasks);
   const workerActive = data.activeTasks || [];
   const workerDone = data.completedHistory || [];
-  const active = workerActive.concat(hubActive);
-  const completed = workerDone.concat(hubCompleted);
+
+  const workerTaskIds = new Set([
+    ...workerActive.map(t => t.taskId),
+    ...workerDone.map(t => t.taskId),
+  ]);
+  const workerDoneMap = new Map(workerDone.map(t => [t.taskId, t]));
+
+  const dedupedHubActive = hubActive.filter(t => !workerTaskIds.has(t.taskId));
+  const dedupedHubCompleted = hubCompleted.filter(t => !workerDoneMap.has(t.taskId));
+
+  const mergedWorkerDone = workerDone.map(t => {
+    const hub = hubCompleted.find(h => h.taskId === t.taskId);
+    if (!hub) return t;
+    return { ...t, taskSource: 'hub', bounty: hub.bounty ?? t.bounty };
+  });
+
+  const active = workerActive.concat(dedupedHubActive);
+  const completed = mergedWorkerDone.concat(dedupedHubCompleted);
 
   const activeEl = document.getElementById('activeTasks');
   if (active.length === 0) {

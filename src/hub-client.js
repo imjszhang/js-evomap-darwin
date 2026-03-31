@@ -173,6 +173,7 @@ export class HubClient {
     const body = { node_id: this.#nodeId };
     const res = await this.#withRetry(() => this.#fetch("/a2a/heartbeat", body));
     return {
+      timestamp: res.server_time || new Date().toISOString(),
       status: res.status,
       creditBalance: res.credit_balance,
       survivalStatus: res.survival_status,

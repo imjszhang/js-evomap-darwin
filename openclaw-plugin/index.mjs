@@ -153,6 +153,7 @@ function broadcastSSE(event, data) {
 
 function slimHeartbeatForInit(hb) {
   if (!hb) return null;
+  const raw = hb.raw || {};
   return {
     timestamp: hb.timestamp,
     status: hb.status,
@@ -161,6 +162,14 @@ function slimHeartbeatForInit(hb) {
     availableWork: (hb.availableWork || []).slice(0, 80),
     nextHeartbeatMs: hb.nextHeartbeatMs,
     pendingEvents: hb.pendingEvents,
+    raw: {
+      node_status: raw.node_status,
+      survival_status: raw.survival_status,
+      credit_balance: raw.credit_balance,
+      next_heartbeat_ms: raw.next_heartbeat_ms,
+      available_tasks: (raw.available_tasks || []).slice(0, 80),
+      topic_climate: raw.topic_climate,
+    },
   };
 }
 
@@ -1291,7 +1300,9 @@ export default function register(api) {
   api.registerTool({
     name: "darwin_task_complete",
     label: "Darwin: Complete Task",
-    description: "Complete a claimed task by submitting an asset (POST /task/complete).",
+    description:
+      "Complete a claimed task by submitting an asset. " +
+      "Validates and publishes the asset bundle before marking complete.",
     parameters: {
       type: "object",
       properties: {
@@ -1303,8 +1314,44 @@ export default function register(api) {
     async execute(_toolCallId, params) {
       try {
         const darwin = await getDarwin(pluginCfg);
+        const { buildBundle } = await import(
+          pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "bundle-builder.js")).href
+        );
+
+        let validateOk = null;
+        let publishOk = null;
+
+        const storeEntry = darwin.store
+          ?.ranked(darwin.store.capacity)
+          .find((g) => g.assetId === params.assetId);
+        const capsule = storeEntry?.capsule;
+
+        if (capsule) {
+          const bundle = buildBundle(capsule);
+          try {
+            const vRes = await darwin.hub.validate(bundle);
+            validateOk = vRes?.payload?.valid !== false && vRes?.valid !== false;
+          } catch {
+            validateOk = false;
+          }
+          if (validateOk) {
+            try {
+              await darwin.hub.publish(bundle);
+              publishOk = true;
+            } catch {
+              publishOk = false;
+            }
+          } else {
+            publishOk = false;
+          }
+        }
+
         const res = await darwin.hub.completeTask(params.taskId, params.assetId);
-        return jsonResult(res?.payload ?? res);
+        return jsonResult({
+          ...(res?.payload ?? res),
+          validateOk,
+          publishOk,
+        });
       } catch (err) {
         return textResult(`Task complete failed: ${err.message}`);
       }
