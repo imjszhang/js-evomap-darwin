@@ -250,6 +250,9 @@ async function buildTasksApiPayload(darwin) {
 }
 
 let sseKeepaliveTimer = null;
+let sseStatusBroadcastTimer = null;
+const SSE_STATUS_BROADCAST_MS = 5_000;
+
 function startSSEKeepalive() {
   if (sseKeepaliveTimer) return;
   sseKeepaliveTimer = setInterval(() => {
@@ -257,6 +260,24 @@ function startSSEKeepalive() {
       try { res.write(":keepalive\n\n"); } catch { sseClients.delete(res); }
     }
   }, SSE_KEEPALIVE_MS);
+}
+
+function startSSEStatusBroadcast(pluginCfg) {
+  if (sseStatusBroadcastTimer) return;
+  sseStatusBroadcastTimer = setInterval(async () => {
+    if (sseClients.size === 0) return;
+    try {
+      const darwin = await getDarwin(pluginCfg);
+      broadcastDarwinStatus(darwin);
+    } catch { /* darwin not ready yet */ }
+  }, SSE_STATUS_BROADCAST_MS);
+}
+
+function stopSSEStatusBroadcast() {
+  if (sseStatusBroadcastTimer) {
+    clearInterval(sseStatusBroadcastTimer);
+    sseStatusBroadcastTimer = null;
+  }
 }
 
 function broadcastDarwinStatus(darwin) {
@@ -368,6 +389,10 @@ async function getDarwin(pluginCfg) {
   darwinInstance.on("report", (data) => {
     pushEvent("report", `Reported fitness for ${data.capsuleId?.slice(0, 16)}... (fitness=${data.fitness?.toFixed(3)}, samples=${data.samples})`);
     broadcastDarwinStatus(darwinInstance);
+  });
+  darwinInstance.on("heartbeat", () => {
+    broadcastDarwinStatus(darwinInstance);
+    if (darwinInstance.worker) broadcastSSE("worker", darwinInstance.worker.getStats());
   });
   darwinInstance.on("pending-event", (data) => {
     const type = data.type || data.event_type || "unknown";
@@ -1576,11 +1601,12 @@ export default function register(api) {
       }
       sseClients.add(res);
       startSSEKeepalive();
+      startSSEStatusBroadcast(pluginCfg);
       req.on("close", () => {
         sseClients.delete(res);
-        if (sseClients.size === 0 && sseKeepaliveTimer) {
-          clearInterval(sseKeepaliveTimer);
-          sseKeepaliveTimer = null;
+        if (sseClients.size === 0) {
+          if (sseKeepaliveTimer) { clearInterval(sseKeepaliveTimer); sseKeepaliveTimer = null; }
+          stopSSEStatusBroadcast();
         }
       });
       return true;
@@ -2000,6 +2026,8 @@ export default function register(api) {
             if (result.nextHeartbeatMs && result.nextHeartbeatMs > 0) {
               nextIntervalMs = result.nextHeartbeatMs;
             }
+            broadcastDarwinStatus(darwin);
+            if (darwin.worker) broadcastSSE("worker", darwin.worker.getStats());
             ctx.logger.debug(
               `Heartbeat OK | credits: ${result.creditBalance} | next: ${nextIntervalMs}ms`,
             );
