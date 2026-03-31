@@ -837,6 +837,7 @@
 
     <div class="panel">
       <h2>My Tasks</h2>
+      <p class="panel-hint" style="font-size:11px;color:var(--dim);margin:-4px 0 10px;line-height:1.35">Local worker queue (auto-claim) and Hub bounty tasks from <code>/task/my</code>.</p>
       <div id="myTasksPanel">
         <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px">Active</div>
         <div id="activeTasks"><div style="color:var(--dim)">No active tasks</div></div>
@@ -1081,6 +1082,7 @@ function connectSSE() {
       if (d.revolution) updateRevolution(d.revolution);
       if (d.sponsor) updateSponsor(d.sponsor);
       if (d.worker) updateWorker(d.worker);
+      if (d.tasks) updateMyTasks(d.tasks);
       if (d.published) updatePublished(d.published);
       if (d.status?.heartbeat) updateHeartbeat(d.status.heartbeat);
       if (d.events) {
@@ -1658,9 +1660,12 @@ function renderTaskCard(t) {
       ? '<span class="bounty-amount zero">Free</span>'
       : '';
 
+  const hubBadge = t.taskSource === 'hub'
+    ? '<span class="source-tag hub" title="Hub /task/my">bounty</span>'
+    : '';
   return `<div class="active-task ${cls}">
     <div class="at-header">
-      <span class="at-title">${t.title || t.taskId || '—'}</span>
+      <span class="at-title">${t.title || t.taskId || '—'} ${hubBadge}</span>
       <span class="at-status ${t.status || ''}">${t.status || '?'}</span>
     </div>
     ${t.capsuleSummary ? `<div class="at-meta" style="color:var(--text);opacity:0.7">${(t.capsuleSummary || '').slice(0, 60)}</div>` : ''}
@@ -1669,10 +1674,45 @@ function renderTaskCard(t) {
   </div>`;
 }
 
+function hubMyTasksToDisplayLists(hubRaw) {
+  const hubActive = [];
+  const hubCompleted = [];
+  if (!Array.isArray(hubRaw) || hubRaw.length === 0) return { hubActive, hubCompleted };
+  for (const t of hubRaw) {
+    const st = String(t.status || 'open').toLowerCase();
+    const card = {
+      title: t.title || t.description || (t.task_id || t.id || 'Hub task'),
+      status: t.status || 'open',
+      claimedAt: t.claimed_at || t.created_at || t.updated_at,
+      completedAt: t.completed_at,
+      bounty: t.bounty,
+      taskId: t.task_id || t.id,
+      taskSource: 'hub',
+    };
+    if (st === 'completed') {
+      card.status = 'completed';
+      hubCompleted.push(card);
+    } else if (st === 'expired') {
+      card.status = 'failed';
+      card.failedAt = t.expired_at || t.updated_at;
+      card.error = 'expired';
+      hubCompleted.push(card);
+    } else {
+      hubActive.push(card);
+    }
+  }
+  return { hubActive, hubCompleted };
+}
+
 function updateMyTasks(data) {
   if (!data) return;
+  const { hubActive, hubCompleted } = hubMyTasksToDisplayLists(data.hubMyTasks);
+  const workerActive = data.activeTasks || [];
+  const workerDone = data.completedHistory || [];
+  const active = workerActive.concat(hubActive);
+  const completed = workerDone.concat(hubCompleted);
+
   const activeEl = document.getElementById('activeTasks');
-  const active = data.activeTasks || [];
   if (active.length === 0) {
     activeEl.innerHTML = '<div style="color:var(--dim)">No active tasks</div>';
   } else {
@@ -1680,7 +1720,6 @@ function updateMyTasks(data) {
   }
 
   const compEl = document.getElementById('completedTasks');
-  const completed = data.completedHistory || [];
   if (completed.length === 0) {
     compEl.innerHTML = '<div style="color:var(--dim)">No completed tasks</div>';
   } else {

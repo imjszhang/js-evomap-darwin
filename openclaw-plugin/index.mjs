@@ -204,6 +204,7 @@ async function buildFullSnapshot(darwin) {
       assetId: g.assetId, fitness: g.fitness, source: g.source || "hub",
       summary: g.capsule?.summary, triggers: g.capsule?.trigger, capsule: g.capsule,
     })),
+    tasks: await buildTasksApiPayload(darwin),
     peers: darwin.subscription
       ? (() => {
           const graph = darwin.subscription.graph;
@@ -222,6 +223,29 @@ async function buildFullSnapshot(darwin) {
     worker: status.worker,
     published,
     events: eventBuffer.slice(-30),
+  };
+}
+
+/** Dashboard /api/tasks + SSE: local worker queue plus Hub GET /task/my (bounty tasks). */
+async function buildTasksApiPayload(darwin) {
+  darwin.worker?.reload?.();
+  const stats = darwin.worker?.getStats();
+  let hubMyTasks = [];
+  if (darwin.hub?.nodeId) {
+    try {
+      const res = await darwin.hub.getMyTasks();
+      const arr = res?.tasks ?? res?.payload?.tasks ?? (Array.isArray(res) ? res : []);
+      if (Array.isArray(arr)) hubMyTasks = arr;
+    } catch {
+      /* Hub unreachable or node not registered */
+    }
+  }
+  return {
+    activeTasks: stats?.activeTasks ?? [],
+    completedHistory: stats?.completedHistory ?? [],
+    lastScanResults: stats?.lastScanResults ?? [],
+    counters: stats?.counters ?? {},
+    hubMyTasks,
   };
 }
 
@@ -324,8 +348,10 @@ async function getDarwin(pluginCfg) {
     if (darwinInstance.worker) {
       const stats = darwinInstance.worker.getStats();
       broadcastSSE("worker", stats);
-      broadcastSSE("tasks", { activeTasks: stats.activeTasks, completedHistory: stats.completedHistory });
     }
+    buildTasksApiPayload(darwinInstance)
+      .then((payload) => broadcastSSE("tasks", payload))
+      .catch(() => {});
   });
   darwinInstance.on("task-failed", (data) => {
     pushEvent("task-failed", `Task ${data.taskId} failed: ${data.error}`);
@@ -1779,14 +1805,7 @@ export default function register(api) {
     async handler(_req, res) {
       try {
         const darwin = await getDarwin(pluginCfg);
-        darwin.worker?.reload?.();
-        const stats = darwin.worker?.getStats();
-        sendJson(res, 200, {
-          activeTasks: stats?.activeTasks ?? [],
-          completedHistory: stats?.completedHistory ?? [],
-          lastScanResults: stats?.lastScanResults ?? [],
-          counters: stats?.counters ?? {},
-        });
+        sendJson(res, 200, await buildTasksApiPayload(darwin));
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
