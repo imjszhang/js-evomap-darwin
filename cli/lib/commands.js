@@ -1171,6 +1171,86 @@ async function cmdAssetsSemantic(args) {
   console.log("");
 }
 
+async function cmdFetchSignals(args) {
+  const flags = parseFlags(args);
+  const darwin = createDarwin();
+  if (!darwin.hub.nodeId) {
+    console.log("\n  Not registered. Set NODE_ID / NODE_SECRET in .env or run 'darwin init'.\n");
+    return;
+  }
+
+  if (flags.semantic != null && flags.semantic !== false) {
+    const query = typeof flags.semantic === "string" ? flags.semantic.trim() : (flags._positional || []).join(" ").trim();
+    if (!query) {
+      console.log("\n  Usage: darwin fetch-signals --semantic \"<query>\"\n");
+      return;
+    }
+    console.log(`\n  Semantic search + ingest: "${query}"...\n`);
+    try {
+      const res = await darwin.hub.semanticSearch(query);
+      const assets = res?.assets ?? res?.payload?.assets ?? (Array.isArray(res) ? res : []);
+      const capsuleIds = [];
+      for (const a of assets) {
+        const id = a.asset_id;
+        if (a.type === "Capsule" && id && !darwin.store.has(id)) {
+          capsuleIds.push(id);
+          if (capsuleIds.length >= 12) break;
+        }
+      }
+      if (capsuleIds.length === 0) {
+        console.log("  No new Capsules to ingest (pool already has hits or no Capsule results).\n");
+        return;
+      }
+      const full = await darwin.hub.fetch({ assetIds: capsuleIds });
+      const list = full?.payload?.assets || full?.assets || [];
+      let ingested = 0;
+      let rejected = 0;
+      for (const asset of list) {
+        if (asset.type === "Capsule" && asset.asset_id) {
+          const existingFitness = darwin.tracker.getFitness(asset.asset_id);
+          const added = darwin.store.add(asset, existingFitness ?? 0, "hub");
+          if (added) ingested++;
+          else rejected++;
+        }
+      }
+      console.log(`  Requested ${capsuleIds.length} id(s), full fetch returned ${list.length}, ingested ${ingested}, skipped ${rejected}.\n`);
+    } catch (err) {
+      console.error(`  Failed: ${err.message}`);
+      if (String(err.message).toLowerCase().includes("server_busy") || err.response?.error === "server_busy") {
+        console.error("  Hub is busy; wait and retry (exponential backoff). See https://evomap.ai/skill.md retry guidance.\n");
+      }
+    }
+    console.log("");
+    return;
+  }
+
+  const signals = flags._positional || [];
+  if (signals.length === 0) {
+    console.log(`
+  Usage:
+    darwin fetch-signals <signal> [signal2 ...]     Ingest Capsules from Hub /a2a/fetch for these signals
+    darwin fetch-signals --semantic "<query>"     Ingest top semantic-search Capsules not already in pool
+
+  Examples:
+    darwin fetch-signals CrewAI tool error
+    darwin fetch-signals --semantic "CrewAI tool failure logging retry"
+`);
+    return;
+  }
+
+  console.log(`\n  Fetch + ingest for signals: ${signals.join(", ")}...\n`);
+  try {
+    const res = await darwin.fetchAndIngest(signals);
+    console.log(`  Preview total: ${res.total}, ingested: ${res.ingested}, skipped: ${res.skipped}, rejected: ${res.rejected}\n`);
+  } catch (err) {
+    console.error(`  Failed: ${err.message}`);
+    if (String(err.message).toLowerCase().includes("server_busy") || err.response?.error === "server_busy") {
+      console.error("  Hub is busy; wait and retry (exponential backoff). See https://evomap.ai/skill.md retry guidance.\n");
+    }
+  }
+  console.log("");
+}
+
 // ── DM ───────────────────────────────────────────────────────────────────
 
 async function cmdDmSend(args) {
@@ -1594,6 +1674,8 @@ function cmdHelp() {
     asset <assetId>              View a single asset
     assets-search <signal> ...   Search assets by signals
     assets-semantic <query>      Semantic search
+    fetch-signals <sig> ...      Pull Capsules from Hub into local pool (by signals)
+    fetch-signals --semantic <q> Pull Capsules via semantic search into local pool
 
   DM (Direct Messages):
     dm-send <nodeId> <message>   Send a DM to another node
@@ -1668,6 +1750,7 @@ const COMMANDS = {
   asset: cmdAsset,
   "assets-search": cmdAssetsSearch,
   "assets-semantic": cmdAssetsSemantic,
+  "fetch-signals": cmdFetchSignals,
   // DM
   "dm-send": cmdDmSend,
   "dm-inbox": cmdDmInbox,
