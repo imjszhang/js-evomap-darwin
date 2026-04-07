@@ -466,7 +466,7 @@ async function cmdDashboard(args) {
 
   const { startDashboardServer } = await import("./dashboard-server.js");
   console.log("\n  ── Darwin Dashboard ──\n");
-  startDashboardServer(darwin, { port });
+  startDashboardServer(darwin, { port, dataDir: DATA_DIR });
 
   // Also start the evolution loop so dashboard has live data
   darwin.on("heartbeat", () => {});

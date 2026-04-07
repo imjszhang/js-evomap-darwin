@@ -1076,6 +1076,17 @@ const POLL_INTERVAL_MS = 5000;
 const MODEL_COLORS = ['#00ff88', '#ff6b35', '#4ecdc4', '#a78bfa', '#f472b6', '#fbbf24', '#34d399', '#60a5fa'];
 let lastEventId = 0;
 
+/** Wall-clock labels in the browser's local timezone (avoids UTC-only ISO slices). */
+function formatLocalTime(isoOrDate, { seconds = true } = {}) {
+  const d = typeof isoOrDate === 'string' || typeof isoOrDate === 'number'
+    ? new Date(isoOrDate)
+    : isoOrDate;
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '';
+  const o = { hour: '2-digit', minute: '2-digit', hour12: false };
+  if (seconds) o.second = '2-digit';
+  return d.toLocaleTimeString(undefined, o);
+}
+
 // ── Charts ──────────────────────────────────────────────────────────────
 const fitnessCtx = document.getElementById('fitnessChart').getContext('2d');
 const fitnessChart = new Chart(fitnessCtx, {
@@ -1362,6 +1373,7 @@ function connectWS() {
     document.getElementById('statusDot').classList.add('online');
     document.getElementById('statusText').textContent = 'Connected';
     startStandaloneEarningsPoll();
+    startHealthPolling();
   };
   ws.onclose = () => {
     document.getElementById('statusDot').classList.remove('online');
@@ -1493,7 +1505,7 @@ function updateStatus(s) {
   }
 
   // Update fitness chart
-  const now = new Date().toISOString().slice(11, 19);
+  const now = formatLocalTime(new Date());
   fitnessChart.data.labels.push(now);
   fitnessChart.data.datasets[0].data.push(s.fitness?.avgFitness ?? 0);
   fitnessChart.data.datasets[1].data.push(s.fitness?.topFitness ?? 0);
@@ -1649,7 +1661,7 @@ function updateSponsor(data) {
 
 function addEvent(evt) {
   const el = document.getElementById('eventLog');
-  const time = new Date().toISOString().slice(11, 19);
+  const time = formatLocalTime(new Date());
   const evtType = evt.type || 'event';
   const html = `<div class="chat-message">
     <img src="${AVATAR_URL}" class="chat-avatar" alt="D">
@@ -1740,7 +1752,7 @@ function updateCreditChart(hb, historyArr) {
   if (historyArr && historyArr.length > 0) {
     creditChart.data.labels = historyArr.map((h) => {
       const t = h.timestamp;
-      return t ? t.slice(11, 16) : '';
+      return t ? formatLocalTime(t, { seconds: false }) : '';
     });
     creditChart.data.datasets[0].data = historyArr.map((h) => toCreditNumber(h.creditBalance) ?? 0);
     creditChart.update('none');
@@ -1748,7 +1760,7 @@ function updateCreditChart(hb, historyArr) {
   }
 
   const bal = toCreditNumber(hb.creditBalance ?? hb.raw?.credit_balance) ?? 0;
-  const now = new Date().toISOString().slice(11, 16);
+  const now = formatLocalTime(new Date(), { seconds: false });
   creditHistory.push(bal);
   creditChart.data.labels.push(now);
   creditChart.data.datasets[0].data.push(bal);
@@ -2161,7 +2173,7 @@ function updateHealthPanel(h) {
 }
 
 function renderEvtLogRow(evt) {
-  const ts = evt.timestamp ? evt.timestamp.slice(11, 19) : '';
+  const ts = evt.timestamp ? formatLocalTime(evt.timestamp) : '';
   const type = evt.type || 'event';
   const msg = evt.message || '';
   return `<div class="evtlog-row">

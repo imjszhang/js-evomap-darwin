@@ -22,12 +22,109 @@ const MIME_TYPES = {
   ".js": "application/javascript",
 };
 
+/** YYYY-MM-DD in local timezone (for event log filenames matching user expectations). */
+function localDateYMD(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function buildHealthPayload(darwin, eventBuffer, upSinceIso, dataDir) {
+  const now = Date.now();
+  const status = darwin.getStatus();
+  const hb = status.heartbeat;
+  const lastHeartbeatAge = hb?.timestamp ? now - new Date(hb.timestamp).getTime() : null;
+
+  let lastEvolveAge = null;
+  for (let i = eventBuffer.length - 1; i >= 0; i--) {
+    if (eventBuffer[i].type === "evolve") {
+      lastEvolveAge = now - new Date(eventBuffer[i].timestamp).getTime();
+      break;
+    }
+  }
+
+  let lastFitnessRecordAge = null;
+  try {
+    const fitPath = join(dataDir, "fitness-log.jsonl");
+    const fitRaw = readFileSync(fitPath, "utf-8");
+    const fitLines = fitRaw.trim().split("\n").filter(Boolean);
+    if (fitLines.length > 0) {
+      const last = JSON.parse(fitLines[fitLines.length - 1]);
+      if (last.timestamp) lastFitnessRecordAge = now - new Date(last.timestamp).getTime();
+    }
+  } catch {
+    /* no fitness log yet */
+  }
+
+  let eventCountToday = 0;
+  try {
+    const logPath = join(dataDir, `darwin-events-${localDateYMD()}.jsonl`);
+    const raw = readFileSync(logPath, "utf-8");
+    eventCountToday = raw.trim().split("\n").filter(Boolean).length;
+  } catch {
+    /* no log for today */
+  }
+
+  const genePoolFill = status.geneStore
+    ? status.geneStore.size / (status.geneStore.capacity || 200)
+    : 0;
+  const peerConnections =
+    (status.subscription?.subscriptions ?? 0) +
+    (status.subscription?.subscribers ?? 0) +
+    (status.peerCount ?? 0);
+
+  const TEN_MIN = 10 * 60 * 1000;
+  const THIRTY_MIN = 30 * 60 * 1000;
+  const EIGHT_H = 8 * 60 * 60 * 1000;
+  const TWENTY_FOUR_H = 24 * 60 * 60 * 1000;
+  const SEVEN_D = 7 * 24 * 60 * 60 * 1000;
+
+  const checks = {
+    heartbeatFresh:
+      lastHeartbeatAge !== null && lastHeartbeatAge < TEN_MIN
+        ? "ok"
+        : lastHeartbeatAge !== null && lastHeartbeatAge < THIRTY_MIN
+          ? "warn"
+          : "fail",
+    evolutionFresh:
+      lastEvolveAge !== null && lastEvolveAge < EIGHT_H
+        ? "ok"
+        : lastEvolveAge !== null && lastEvolveAge < TWENTY_FOUR_H
+          ? "warn"
+          : "fail",
+    fitnessDataFresh:
+      lastFitnessRecordAge !== null && lastFitnessRecordAge < TWENTY_FOUR_H
+        ? "ok"
+        : lastFitnessRecordAge !== null && lastFitnessRecordAge < SEVEN_D
+          ? "warn"
+          : "fail",
+    genePoolHealthy: genePoolFill > 0.1 ? "ok" : genePoolFill > 0.05 ? "warn" : "fail",
+    peerConnected: peerConnections > 0 ? "ok" : "fail",
+  };
+
+  return {
+    upSince: upSinceIso,
+    heartbeatService: status.running ? "running" : "stopped",
+    lastHeartbeatAge,
+    lastEvolveAge,
+    lastFitnessRecordAge,
+    genePoolFill: Math.round(genePoolFill * 1000) / 1000,
+    genePoolSize: status.geneStore?.size ?? 0,
+    genePoolCapacity: status.geneStore?.capacity ?? 200,
+    peerConnections,
+    eventCountToday,
+    checks,
+  };
+}
+
 /**
  * Minimal dashboard server with WebSocket support (no external deps).
  * Uses the raw HTTP upgrade + WebSocket frame protocol.
  */
-export function startDashboardServer(darwin, { port = 3777 } = {}) {
+export function startDashboardServer(darwin, { port = 3777, dataDir = "./data" } = {}) {
   const clients = new Set();
+  const upSinceIso = new Date().toISOString();
 
   const EVENT_BUFFER_MAX = 100;
   const eventBuffer = [];
@@ -75,6 +172,46 @@ export function startDashboardServer(darwin, { port = 3777 } = {}) {
           sendJson(res, 500, { error: err.message });
         }
       })();
+      return;
+    }
+
+    if (url.pathname === "/api/health") {
+      try {
+        sendJson(res, 200, buildHealthPayload(darwin, eventBuffer, upSinceIso, dataDir));
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/events-log") {
+      try {
+        const dateStr = url.searchParams.get("date") || localDateYMD();
+        const limit = Math.min(parseInt(url.searchParams.get("limit") || "100", 10), 500);
+        const typeFilter = url.searchParams.get("type") || "";
+        const logPath = join(dataDir, `darwin-events-${dateStr}.jsonl`);
+
+        let events = [];
+        try {
+          const raw = readFileSync(logPath, "utf-8");
+          const lines = raw.trim().split("\n").filter(Boolean);
+          for (const line of lines) {
+            try {
+              const evt = JSON.parse(line);
+              if (!typeFilter || evt.type === typeFilter) events.push(evt);
+            } catch {
+              /* skip malformed lines */
+            }
+          }
+        } catch {
+          /* file missing */
+        }
+
+        const tail = events.slice(-limit);
+        sendJson(res, 200, { date: dateStr, total: events.length, events: tail });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
       return;
     }
 
