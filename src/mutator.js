@@ -55,7 +55,8 @@ export class Mutator {
 
   /**
    * Run one mutation cycle on the darwin instance.
-   * Called by Darwin's evolve loop when mutator is attached.
+   * When gap analysis data is available, 50 % signal-generalize, 25 % strategy-crossover,
+   * 25 % classic (numeric / reorder / drop). Without gap data: classic only.
    */
   async cycle(darwin) {
     if (!this.shouldMutate()) return;
@@ -63,10 +64,26 @@ export class Mutator {
     const topGenes = darwin.store.ranked(10);
     if (topGenes.length === 0) return;
 
-    // Pick a random high-fitness gene to mutate
+    const gap = darwin.lastGapAnalysis;
+    const hasGap = gap && (gap.uncovered.length > 0 || gap.weak.length > 0);
+
+    if (hasGap) {
+      const roll = Math.random();
+      if (roll < 0.50) {
+        const variant = this.#signalGeneralize(topGenes, gap);
+        if (variant) { darwin.store.add(variant, 0, "mutation"); return; }
+      } else if (roll < 0.75 && topGenes.length >= 2) {
+        const variant = this.#strategyCrossover(topGenes);
+        if (variant) {
+          const minFit = Math.min(topGenes[0].fitness ?? 0, topGenes[1].fitness ?? 0);
+          darwin.store.add(variant, minFit * 0.5, "mutation");
+          return;
+        }
+      }
+    }
+
     const target = topGenes[Math.floor(Math.random() * Math.min(3, topGenes.length))];
     const variants = this.mutate(target.capsule);
-
     for (const variant of variants) {
       darwin.store.add(variant, target.fitness * 0.9, "mutation");
     }
@@ -154,6 +171,73 @@ export class Mutator {
     variant.asset_id = computeAssetId(variant);
     variant._mutation = "step_drop";
     variant._parent = capsule.asset_id;
+    return variant;
+  }
+
+  /**
+   * Clone a high-fitness capsule and append 1-2 uncovered/weak signals to its
+   * trigger array so it can be selected for previously-unmatched tasks.
+   */
+  #signalGeneralize(topGenes, gap) {
+    const gapSignals = [...gap.uncovered, ...gap.weak];
+    if (gapSignals.length === 0) return null;
+
+    const donor = topGenes[Math.floor(Math.random() * Math.min(3, topGenes.length))];
+    if (!donor?.capsule) return null;
+
+    const existingTriggers = new Set(
+      (donor.capsule.trigger || donor.capsule.signals_match || []).map((t) => t.toLowerCase()),
+    );
+    const newSignals = gapSignals.filter((s) => !existingTriggers.has(s.toLowerCase()));
+    if (newSignals.length === 0) return null;
+
+    const toAdd = newSignals.slice(0, 1 + Math.floor(Math.random() * 2));
+    const variant = {
+      ...donor.capsule,
+      trigger: [...(donor.capsule.trigger || donor.capsule.signals_match || []), ...toAdd],
+    };
+    delete variant.asset_id;
+    variant.asset_id = computeAssetId(variant);
+    variant._mutation = "signal_generalize";
+    variant._parent = donor.capsule.asset_id;
+    return variant;
+  }
+
+  /**
+   * Combine the first half of capsule A's strategy with the second half of
+   * capsule B's strategy; union their triggers.
+   */
+  #strategyCrossover(topGenes) {
+    if (topGenes.length < 2) return null;
+
+    const idxA = Math.floor(Math.random() * Math.min(3, topGenes.length));
+    let idxB = Math.floor(Math.random() * Math.min(5, topGenes.length));
+    if (idxB === idxA) idxB = (idxA + 1) % topGenes.length;
+
+    const a = topGenes[idxA]?.capsule;
+    const b = topGenes[idxB]?.capsule;
+    if (!a?.strategy?.length || !b?.strategy?.length) return null;
+
+    const midA = Math.ceil(a.strategy.length / 2);
+    const midB = Math.floor(b.strategy.length / 2);
+    const mergedStrategy = [...a.strategy.slice(0, midA), ...b.strategy.slice(midB)];
+
+    const triggerSet = new Set([
+      ...(a.trigger || a.signals_match || []),
+      ...(b.trigger || b.signals_match || []),
+    ]);
+
+    const variant = {
+      ...a,
+      trigger: [...triggerSet],
+      strategy: mergedStrategy,
+      summary: `Crossover: ${(a.summary || "").slice(0, 60)} + ${(b.summary || "").slice(0, 60)}`,
+    };
+    delete variant.asset_id;
+    variant.asset_id = computeAssetId(variant);
+    variant._mutation = "strategy_crossover";
+    variant._parentA = a.asset_id;
+    variant._parentB = b.asset_id;
     return variant;
   }
 }

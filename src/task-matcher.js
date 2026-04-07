@@ -268,6 +268,7 @@ export class TaskMatcher {
         success: false,
         tokensUsed: 0,
         baselineTokens: 0,
+        rewardStatus: "failed",
       });
 
       throw err;
@@ -310,6 +311,7 @@ export class TaskMatcher {
       baselineTokens: 0,
       contribution: contribFraction,
       bounty: task.bounty_amount || 0,
+      rewardStatus: rewardStatus || null,
     });
 
     return { taskId, assignmentId, assetId: completeAssetId, claimRes, completeRes };
@@ -428,21 +430,23 @@ export class TaskMatcher {
     let candidates = this.scan(tasks, darwin.store);
     this.#counters.scanned += tasks.length;
 
-    // Fallback: create template capsules for unmatched tasks
+    // Fallback: create template capsules for unmatched tasks (up to 3)
     if (candidates.length === 0 && this.#autoSubmit && this.#enabled) {
       const touched = new Set([
         ...this.#activeTasks.map((t) => t.taskId),
         ...this.#completedHistory.map((t) => t.taskId),
       ]);
       const untouched = tasks.filter((t) => !touched.has(t.task_id));
-      if (untouched.length > 0) {
-        const target = untouched[0];
+      const toTemplate = untouched.slice(0, 3);
+      for (const target of toTemplate) {
         try {
           const capsule = CapsuleFactory.createForTask(target);
           darwin.store.add(capsule, 0.3, "template");
           darwin._emit?.("template-capsule", { taskId: target.task_id, assetId: capsule.asset_id });
-          candidates = this.scan(tasks, darwin.store);
         } catch { /* template creation failed, proceed without */ }
+      }
+      if (toTemplate.length > 0) {
+        candidates = this.scan(tasks, darwin.store);
       }
     }
 

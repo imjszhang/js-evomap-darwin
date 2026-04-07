@@ -27,7 +27,7 @@ export class FitnessTracker {
   /**
    * Record a single Capsule usage outcome.
    */
-  record(capsuleId, taskType, { success, tokensUsed, baselineTokens, durationMs, model, sponsorId, contribution, bounty } = {}) {
+  record(capsuleId, taskType, { success, tokensUsed, baselineTokens, durationMs, model, sponsorId, contribution, bounty, rewardStatus } = {}) {
     const entry = {
       capsule_id: capsuleId,
       task_type: taskType,
@@ -36,6 +36,7 @@ export class FitnessTracker {
       baseline_tokens: baselineTokens ?? 0,
       contribution: contribution ?? null,
       bounty: bounty ?? 0,
+      reward_status: rewardStatus ?? null,
       duration_ms: durationMs ?? 0,
       model: model ?? null,
       sponsor_id: sponsorId ?? null,
@@ -61,11 +62,12 @@ export class FitnessTracker {
    * Compute the fitness score for a Capsule.
    * Returns null if fewer than MIN_SAMPLES records exist.
    *
-   * When real token data is available:
-   *   fitness = weighted_success_rate * (1 - weighted_avg_tokens / weighted_avg_baseline)
+   * Contributor-first formula: fitness = success_rate * contribution_quality.
    *
-   * When only Hub contribution data is available (baselineTokens === 0):
-   *   fitness = weighted_success_rate * weighted_avg_contribution
+   * - Records with bounty > 0 and non-rejected rewardStatus get weight x1.5.
+   * - Records with rejected / failed rewardStatus get weight x0.3.
+   * - contribution_quality = weighted avg contribution when contribution data
+   *   is available; falls back to 1.0 (pure success_rate) otherwise.
    *
    * Weights decay exponentially with a 7-day half-life.
    */
@@ -75,41 +77,40 @@ export class FitnessTracker {
 
     const now = Date.now();
     const window = arr.slice(-WINDOW_SIZE);
+    const REJECTED = new Set(["rejected", "failed"]);
 
     let totalWeight = 0;
     let successWeight = 0;
-    let tokensWeighted = 0;
-    let baselineWeighted = 0;
     let contribWeighted = 0;
-    let contribCount = 0;
+    let contribWeightSum = 0;
 
     for (const r of window) {
       const age = now - new Date(r.timestamp).getTime();
-      const weight = Math.pow(0.5, age / HALF_LIFE_MS);
+      let weight = Math.pow(0.5, age / HALF_LIFE_MS);
+
+      const rs = r.reward_status || r.rewardStatus;
+      if (REJECTED.has(rs)) {
+        weight *= 0.3;
+      } else if ((r.bounty ?? 0) > 0 && rs && !REJECTED.has(rs)) {
+        weight *= 1.5;
+      }
+
       totalWeight += weight;
       if (r.success) successWeight += weight;
-      tokensWeighted += r.tokens_used * weight;
-      baselineWeighted += r.baseline_tokens * weight;
+
       if (typeof r.contribution === "number") {
-        contribWeighted += r.contribution * weight;
-        contribCount++;
+        contribWeighted += Math.max(0, Math.min(1, r.contribution)) * weight;
+        contribWeightSum += weight;
       }
     }
 
     if (totalWeight === 0) return 0;
 
     const successRate = successWeight / totalWeight;
-    const avgBaseline = baselineWeighted / totalWeight;
 
-    if (avgBaseline > 0) {
-      const avgTokens = tokensWeighted / totalWeight;
-      const tokenSavings = Math.max(0, 1 - avgTokens / avgBaseline);
-      return Math.round(successRate * tokenSavings * 1000) / 1000;
-    }
-
-    if (contribCount > 0) {
-      const avgContrib = contribWeighted / totalWeight;
-      return Math.round(successRate * Math.max(0, Math.min(1, avgContrib)) * 1000) / 1000;
+    if (contribWeightSum > 0) {
+      const avgContrib = contribWeighted / contribWeightSum;
+      return Math.round(successRate * avgContrib * 1000) / 1000;
     }
 
     return Math.round(successRate * 1000) / 1000;
@@ -175,13 +176,17 @@ export class FitnessTracker {
         if (taskType && r.task_type.toLowerCase() !== taskType.toLowerCase()) continue;
 
         if (!byModel.has(r.model)) {
-          byModel.set(r.model, { successes: 0, total: 0, tokens: 0, baseline: 0 });
+          byModel.set(r.model, { successes: 0, total: 0, tokens: 0, baseline: 0, contribSum: 0, contribCount: 0 });
         }
         const m = byModel.get(r.model);
         m.total++;
         if (r.success) m.successes++;
         m.tokens += r.tokens_used;
         m.baseline += r.baseline_tokens;
+        if (typeof r.contribution === "number") {
+          m.contribSum += r.contribution;
+          m.contribCount++;
+        }
       }
     }
 
@@ -190,9 +195,8 @@ export class FitnessTracker {
       if (m.total < MIN_SAMPLES) continue;
       const successRate = m.successes / m.total;
       const avgTokens = Math.round(m.tokens / m.total);
-      const avgBaseline = m.baseline / m.total;
-      const tokenSavings = avgBaseline > 0 ? Math.max(0, 1 - m.tokens / m.total / avgBaseline) : 0;
-      const avgFitness = Math.round(successRate * tokenSavings * 1000) / 1000;
+      const avgContrib = m.contribCount > 0 ? m.contribSum / m.contribCount : 0;
+      const avgFitness = Math.round(successRate * (avgContrib > 0 ? Math.min(1, avgContrib) : 1) * 1000) / 1000;
 
       results.push({
         model,
@@ -222,6 +226,9 @@ export class FitnessTracker {
     let totalCapsules = 0;
     let totalTokensUsed = 0;
     let totalBaselineTokens = 0;
+    let bountyTotal = 0;
+    let bountyCompleted = 0;
+    let contribSum = 0;
     const fitnessValues = [];
 
     for (const [capsuleId, records] of this.#records) {
@@ -230,6 +237,11 @@ export class FitnessTracker {
       for (const r of records) {
         totalTokensUsed += r.tokens_used || 0;
         totalBaselineTokens += r.baseline_tokens || 0;
+        if ((r.bounty ?? 0) > 0) {
+          bountyTotal++;
+          if (r.success) bountyCompleted++;
+        }
+        if (typeof r.contribution === "number") contribSum += r.contribution;
       }
       const f = this.getFitness(capsuleId);
       if (f !== null) fitnessValues.push(f);
@@ -248,6 +260,10 @@ export class FitnessTracker {
       tokenSavingsRate: totalBaselineTokens > 0
         ? Math.round((1 - totalTokensUsed / totalBaselineTokens) * 1000) / 1000
         : 0,
+      taskCompletionRate: bountyTotal > 0
+        ? Math.round((bountyCompleted / bountyTotal) * 1000) / 1000
+        : 0,
+      totalContribution: Math.round(contribSum * 1000) / 1000,
     };
   }
 

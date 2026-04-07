@@ -6,6 +6,7 @@ import { FitnessTracker } from "./fitness-tracker.js";
 import { CapsuleSelector } from "./capsule-selector.js";
 import { BootstrapEvaluator } from "./bootstrap-evaluator.js";
 import { CreditLedger } from "./credit-ledger.js";
+import { CapsuleFactory } from "./capsule-factory.js";
 import { getAllMetaGenes } from "./meta-genes.js";
 
 export { HubClient } from "./hub-client.js";
@@ -92,6 +93,8 @@ export class Darwin {
   #nodeReputationCache = null;
   /** When false: skip fetchAndIngest and heartbeat gap fetch (contributor-first; no Hub capsule pull). */
   #hubAssetFetchEnabled;
+  /** Result of the most recent task-signal coverage gap analysis. */
+  #lastGapAnalysis = null;
 
   constructor({
     hubUrl,
@@ -139,6 +142,7 @@ export class Darwin {
   get hubAssetFetchEnabled() {
     return this.#hubAssetFetchEnabled;
   }
+  get lastGapAnalysis() { return this.#lastGapAnalysis; }
   get store() { return this.#store; }
   get tracker() { return this.#tracker; }
   get selector() { return this.#selector; }
@@ -428,6 +432,14 @@ export class Darwin {
       worker: this.#taskMatcher?.getStats() ?? null,
       nodeReputation: this.#nodeReputationCache,
       hubAssetFetch: this.#hubAssetFetchEnabled,
+      signalCoverage: this.#lastGapAnalysis
+        ? {
+            total: this.#lastGapAnalysis.total,
+            covered: this.#lastGapAnalysis.covered,
+            weak: this.#lastGapAnalysis.weak.length,
+            uncovered: this.#lastGapAnalysis.uncovered.length,
+          }
+        : null,
       credits: this.#creditLedger.getSummary(),
       leaderboard: this.#tracker.rankByModel?.() ?? [],
       heartbeat: hb ? {
@@ -713,6 +725,44 @@ export class Darwin {
     return [...this.#taskBuffer.values()].map((e) => e.task);
   }
 
+  #analyzeSignalCoverage() {
+    const signalSet = new Set();
+    for (const { task } of this.#taskBuffer.values()) {
+      const sigs = (task.signals || "").split(",").map((s) => s.trim()).filter(Boolean);
+      for (const s of sigs) signalSet.add(s);
+    }
+
+    const uncovered = [];
+    const weak = [];
+    let covered = 0;
+
+    for (const sig of signalSet) {
+      const matches = this.#store.findByTaskType(sig);
+      if (matches.length === 0) {
+        uncovered.push(sig);
+        continue;
+      }
+      const best = matches[0];
+      const fitness = this.#tracker.getFitness(best.assetId);
+      if ((fitness !== null && fitness < 0.3) || (best.matchQuality ?? 0) < 0.5) {
+        weak.push(sig);
+      } else {
+        covered++;
+      }
+    }
+
+    return { total: signalSet.size, covered, uncovered, weak };
+  }
+
+  #findBufferedTaskForSignal(signal) {
+    const lower = signal.toLowerCase();
+    for (const { task } of this.#taskBuffer.values()) {
+      const sigs = (task.signals || "").split(",").map((s) => s.trim().toLowerCase());
+      if (sigs.includes(lower)) return task;
+    }
+    return null;
+  }
+
   #reEvaluateUnscoredGenes() {
     try {
       const unscored = this.#store.ranked(this.#store.capacity)
@@ -821,7 +871,28 @@ export class Darwin {
         }
       }
 
-      // 2. Agent-driven evolution (preferred) or fallback to Mutator
+      // 2. Gap analysis: identify uncovered/weak signals and pre-generate templates
+      try {
+        this.#lastGapAnalysis = this.#analyzeSignalCoverage();
+        const gap = this.#lastGapAnalysis;
+        let templatesCreated = 0;
+        const uncoveredToTemplate = gap.uncovered.slice(0, 5);
+        for (const sig of uncoveredToTemplate) {
+          const task = this.#findBufferedTaskForSignal(sig);
+          if (!task) continue;
+          const capsule = CapsuleFactory.createForTask(task);
+          if (capsule && this.#store.add(capsule, 0, "template")) {
+            templatesCreated++;
+          }
+        }
+        if (gap.uncovered.length > 0 || gap.weak.length > 0) {
+          this.#emit("gap-analysis", { uncovered: gap.uncovered, weak: gap.weak, templatesCreated });
+        }
+      } catch {
+        // Gap analysis is best-effort
+      }
+
+      // 3. Agent-driven evolution (preferred) or fallback to Mutator
       if (this.#agentCallback) {
         try {
           await this.#agentCallback(this);
@@ -847,17 +918,17 @@ export class Darwin {
         }
       }
 
-      // 3. Subscription system (preferred) or legacy peer exchange
+      // 4. Subscription system (preferred) or legacy peer exchange
       if (this.#subscription && typeof this.#subscription.cycle === "function") {
         await this.#subscription.cycle(this);
       } else if (this.#peerExchange && typeof this.#peerExchange.cycle === "function") {
         await this.#peerExchange.cycle(this);
       }
 
-      // 4. Task matching is now driven by heartbeat (every 5 min) instead of here.
+      // 5. Task matching is now driven by heartbeat (every 5 min) instead of here.
       //    See #doHeartbeat() for the task matching call.
 
-      // 5. Re-evaluate unscored subscription genes with structural scoring
+      // 6. Re-evaluate unscored subscription genes with structural scoring
       this.#reEvaluateUnscoredGenes();
 
       this.#emit("evolve", { timestamp: new Date().toISOString() });

@@ -825,6 +825,8 @@
         <div class="stat-row"><span class="stat-label">Peers</span><span class="stat-value" id="peerCount">0</span></div>
         <div class="stat-row"><span class="stat-label">Mutator</span><span class="stat-value" id="mutatorStatus">—</span></div>
         <div class="stat-row"><span class="stat-label">Sponsor</span><span class="stat-value sponsor" id="sponsorStatus">—</span></div>
+        <div class="stat-row"><span class="stat-label">Task Completion</span><span class="stat-value" id="taskCompletionRate" title="Completed bounty tasks / total bounty tasks">—</span></div>
+        <div class="stat-row"><span class="stat-label">Signal Coverage</span><span class="stat-value" id="signalCoverage" title="Covered / total signals from task buffer">—</span></div>
       </div>
     </div>
 
@@ -974,6 +976,7 @@
         <div class="stat-row"><span class="stat-label">Completed</span><span class="stat-value good" id="workerCompleted">0</span></div>
         <div class="stat-row"><span class="stat-label">Avg Contribution</span><span class="stat-value" id="workerAvgContrib">—</span></div>
         <div class="stat-row"><span class="stat-label">Reward Rate</span><span class="stat-value" id="workerRewardRate">—</span></div>
+        <div class="stat-row"><span class="stat-label">Total Contribution</span><span class="stat-value" id="workerTotalContrib" title="Cumulative contribution score from fitness tracker">—</span></div>
         <div class="stat-row"><span class="stat-label">Failed</span><span class="stat-value" id="workerFailed">0</span></div>
         <div style="margin-top:10px">
           <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:4px">Recent Matches</div>
@@ -1470,6 +1473,25 @@ function updateStatus(s) {
     ? `${s.sponsor?.totalGrants ?? 0} grants`
     : 'Inactive';
 
+  const tcrEl = document.getElementById('taskCompletionRate');
+  if (tcrEl) {
+    const tcr = s.fitness?.taskCompletionRate;
+    if (tcr != null) {
+      tcrEl.textContent = (tcr * 100).toFixed(1) + '%';
+      tcrEl.className = 'stat-value' + (tcr >= 0.7 ? ' good' : tcr < 0.3 ? ' danger' : '');
+    } else {
+      tcrEl.textContent = '—';
+    }
+  }
+
+  const scEl = document.getElementById('signalCoverage');
+  if (scEl && s.signalCoverage) {
+    const sc = s.signalCoverage;
+    scEl.textContent = `${sc.covered}/${sc.total}`;
+    scEl.title = `Covered: ${sc.covered}, Weak: ${sc.weak}, Uncovered: ${sc.uncovered}`;
+    scEl.className = 'stat-value' + (sc.total > 0 && sc.uncovered === 0 ? ' good' : sc.uncovered > sc.covered ? ' danger' : '');
+  }
+
   // Update fitness chart
   const now = new Date().toISOString().slice(11, 19);
   fitnessChart.data.labels.push(now);
@@ -1501,6 +1523,12 @@ function updateStatus(s) {
   }
 
   if (s.worker) updateWorker(s.worker);
+
+  const tcEl = document.getElementById('workerTotalContrib');
+  if (tcEl) {
+    const tc = s.fitness?.totalContribution;
+    tcEl.textContent = tc != null && tc > 0 ? tc.toFixed(3) : '—';
+  }
 
   if (s.heartbeat) updateHeartbeat(s.heartbeat);
 
@@ -2256,7 +2284,7 @@ if (!IS_PLUGIN_MODE) {
       updateStatus({
         nodeId: 'node_demo_00000000',
         geneStore: { size: 0, capacity: 200 },
-        fitness: { totalRecords: 0, trackedCapsules: 0, scoredCapsules: 0, avgFitness: 0, topFitness: 0, totalTokensUsed: 0, totalBaselineTokens: 0, tokenSavingsRate: 0 },
+        fitness: { totalRecords: 0, trackedCapsules: 0, scoredCapsules: 0, avgFitness: 0, topFitness: 0, totalTokensUsed: 0, totalBaselineTokens: 0, tokenSavingsRate: 0, taskCompletionRate: 0, totalContribution: 0 },
         tokenBaseline: 0,
         tokenDarwin: 0,
         hasMutator: false,
