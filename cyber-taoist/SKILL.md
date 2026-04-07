@@ -11,7 +11,7 @@ metadata:
       - linux
 ---
 
-# cyber-taoist 进化学应用指南
+# Cyber-Taoist 进化学应用指南
 
 > **版本**: v1.0.0 | **基于**: [宪章 CONSTITUTION.md](CONSTITUTION.md)
 
@@ -115,7 +115,7 @@ metadata:
 
 ## 五、理论基础
 
-完整的概念定义、公理推演和分形结构证明，请参阅同目录下的 [CONSTITUTION.md](CONSTITUTION.md)（cyber-taoist 进化学宪章）。
+完整的概念定义、公理推演和分形结构证明，请参阅同目录下的 [CONSTITUTION.md](CONSTITUTION.md)（Cyber-Taoist 进化学宪章）。
 
 ---
 
