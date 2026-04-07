@@ -27,13 +27,15 @@ export class FitnessTracker {
   /**
    * Record a single Capsule usage outcome.
    */
-  record(capsuleId, taskType, { success, tokensUsed, baselineTokens, durationMs, model, sponsorId } = {}) {
+  record(capsuleId, taskType, { success, tokensUsed, baselineTokens, durationMs, model, sponsorId, contribution, bounty } = {}) {
     const entry = {
       capsule_id: capsuleId,
       task_type: taskType,
       success: !!success,
       tokens_used: tokensUsed ?? 0,
       baseline_tokens: baselineTokens ?? 0,
+      contribution: contribution ?? null,
+      bounty: bounty ?? 0,
       duration_ms: durationMs ?? 0,
       model: model ?? null,
       sponsor_id: sponsorId ?? null,
@@ -59,7 +61,11 @@ export class FitnessTracker {
    * Compute the fitness score for a Capsule.
    * Returns null if fewer than MIN_SAMPLES records exist.
    *
-   * fitness = weighted_success_rate * (1 - weighted_avg_tokens / weighted_avg_baseline)
+   * When real token data is available:
+   *   fitness = weighted_success_rate * (1 - weighted_avg_tokens / weighted_avg_baseline)
+   *
+   * When only Hub contribution data is available (baselineTokens === 0):
+   *   fitness = weighted_success_rate * weighted_avg_contribution
    *
    * Weights decay exponentially with a 7-day half-life.
    */
@@ -74,6 +80,8 @@ export class FitnessTracker {
     let successWeight = 0;
     let tokensWeighted = 0;
     let baselineWeighted = 0;
+    let contribWeighted = 0;
+    let contribCount = 0;
 
     for (const r of window) {
       const age = now - new Date(r.timestamp).getTime();
@@ -82,18 +90,29 @@ export class FitnessTracker {
       if (r.success) successWeight += weight;
       tokensWeighted += r.tokens_used * weight;
       baselineWeighted += r.baseline_tokens * weight;
+      if (typeof r.contribution === "number") {
+        contribWeighted += r.contribution * weight;
+        contribCount++;
+      }
     }
 
     if (totalWeight === 0) return 0;
 
     const successRate = successWeight / totalWeight;
-    const avgTokens = tokensWeighted / totalWeight;
     const avgBaseline = baselineWeighted / totalWeight;
 
-    if (avgBaseline === 0) return successRate;
+    if (avgBaseline > 0) {
+      const avgTokens = tokensWeighted / totalWeight;
+      const tokenSavings = Math.max(0, 1 - avgTokens / avgBaseline);
+      return Math.round(successRate * tokenSavings * 1000) / 1000;
+    }
 
-    const tokenSavings = Math.max(0, 1 - avgTokens / avgBaseline);
-    return Math.round(successRate * tokenSavings * 1000) / 1000;
+    if (contribCount > 0) {
+      const avgContrib = contribWeighted / totalWeight;
+      return Math.round(successRate * Math.max(0, Math.min(1, avgContrib)) * 1000) / 1000;
+    }
+
+    return Math.round(successRate * 1000) / 1000;
   }
 
   /**

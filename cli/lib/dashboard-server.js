@@ -3,6 +3,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { buildEarningsApiPayload } from "../../src/earnings-api.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_DIR = join(__dirname, "..", "..", "dashboard");
@@ -62,6 +63,18 @@ export function startDashboardServer(darwin, { port = 3777 } = {}) {
     if (url.pathname === "/api/events") {
       const since = parseInt(url.searchParams.get("since") || "0", 10);
       sendJson(res, 200, eventBuffer.filter((e) => e.id > since));
+      return;
+    }
+
+    if (url.pathname === "/api/earnings") {
+      void (async () => {
+        try {
+          const payload = await buildEarningsApiPayload(darwin);
+          sendJson(res, 200, payload);
+        } catch (err) {
+          sendJson(res, 500, { error: err.message });
+        }
+      })();
       return;
     }
 
@@ -212,6 +225,31 @@ export function startDashboardServer(darwin, { port = 3777 } = {}) {
     const msg = `Task ${data.taskId} failed: ${data.error}`;
     pushEvent("task-failed", msg);
     broadcast({ type: "event", data: { type: "task-failed", message: msg } });
+    if (darwin.worker) {
+      const stats = darwin.worker.getStats();
+      broadcast({ type: "worker", data: stats });
+      broadcast({ type: "tasks", data: { activeTasks: stats.activeTasks, completedHistory: stats.completedHistory } });
+    }
+  });
+  darwin.on("task-abandoned", (data) => {
+    const msg = `Abandoned ${data.taskId?.slice(0, 16) || "?"} (${data.reason || "?"})`;
+    pushEvent("task-abandoned", msg);
+    broadcast({ type: "event", data: { type: "task-abandoned", message: msg } });
+    if (darwin.worker) {
+      const stats = darwin.worker.getStats();
+      broadcast({ type: "worker", data: stats });
+      broadcast({ type: "tasks", data: { activeTasks: stats.activeTasks, completedHistory: stats.completedHistory } });
+    }
+  });
+  darwin.on("task-reconciled", (data) => {
+    const msg = `Hub sync: ${data.taskId?.slice(0, 16) || "?"} → ${data.outcome || "?"} (${data.hubStatus || ""})`;
+    pushEvent("task-reconciled", msg);
+    broadcast({ type: "event", data: { type: "task-reconciled", message: msg } });
+    if (darwin.worker) {
+      const stats = darwin.worker.getStats();
+      broadcast({ type: "worker", data: stats });
+      broadcast({ type: "tasks", data: { activeTasks: stats.activeTasks, completedHistory: stats.completedHistory } });
+    }
   });
 
   // Periodic status push

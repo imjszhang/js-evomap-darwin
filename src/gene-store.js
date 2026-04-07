@@ -104,19 +104,56 @@ export class GeneStore {
 
   /**
    * Get all capsules matching a task type (by trigger signals).
+   * Uses three-level progressive matching:
+   *   Level 1 (exact):   exact case-insensitive match        -> matchQuality 1.0
+   *   Level 2 (contains): one string contains the other      -> matchQuality 0.7
+   *   Level 3 (token):   tokenized overlap (split on -_camel) -> matchQuality 0.5
    */
   findByTaskType(taskType) {
+    const query = taskType.toLowerCase();
+    const queryTokens = GeneStore.#tokenize(query);
     const results = [];
+
     for (const [id, entry] of this.#genes) {
       const triggers = entry.capsule.trigger || entry.capsule.signals_match || [];
-      const matchesSignal = triggers.some(
-        (t) => t.toLowerCase() === taskType.toLowerCase(),
-      );
-      if (matchesSignal) {
-        results.push({ ...entry, assetId: id });
+      let bestQuality = 0;
+
+      for (const t of triggers) {
+        const tLower = t.toLowerCase();
+        if (tLower === query) {
+          bestQuality = 1.0;
+          break;
+        }
+        if (bestQuality < 0.7 && (tLower.includes(query) || query.includes(tLower))) {
+          bestQuality = 0.7;
+          continue;
+        }
+        if (bestQuality < 0.5) {
+          const tTokens = GeneStore.#tokenize(tLower);
+          const overlap = queryTokens.filter((tok) => tTokens.includes(tok)).length;
+          if (overlap > 0 && overlap >= Math.min(queryTokens.length, tTokens.length) * 0.5) {
+            bestQuality = 0.5;
+          }
+        }
+      }
+
+      if (bestQuality > 0) {
+        results.push({ ...entry, assetId: id, matchQuality: bestQuality });
       }
     }
-    return results.sort((a, b) => (b.fitness ?? 0) - (a.fitness ?? 0));
+    return results.sort((a, b) => {
+      const qDiff = (b.matchQuality ?? 0) - (a.matchQuality ?? 0);
+      if (qDiff !== 0) return qDiff;
+      return (b.fitness ?? 0) - (a.fitness ?? 0);
+    });
+  }
+
+  static #tokenize(str) {
+    return str
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .toLowerCase()
+      .split(/[-_\s]+/)
+      .filter((t) => t.length > 1);
   }
 
   /**
@@ -175,7 +212,7 @@ export class GeneStore {
   }
 
   getSourceBreakdown() {
-    const counts = { hub: 0, mutation: 0, peer: 0, subscription: 0, meta: 0 };
+    const counts = { hub: 0, mutation: 0, peer: 0, subscription: 0, meta: 0, template: 0 };
     for (const [, entry] of this.#genes) {
       const src = entry.source || "hub";
       if (src in counts) counts[src]++;

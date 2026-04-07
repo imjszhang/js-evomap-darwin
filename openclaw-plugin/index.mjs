@@ -3,6 +3,7 @@ import nodeFs from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { buildEarningsApiPayload } from "../src/earnings-api.js";
 
 const __dirname = nodePath.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = nodePath.resolve(__dirname, "..");
@@ -333,6 +334,7 @@ async function getDarwin(pluginCfg) {
     explorationRate: pluginCfg.explorationRate || 0.1,
     nodeId: pluginCfg.nodeId || undefined,
     nodeSecret: pluginCfg.nodeSecret || undefined,
+    ...(pluginCfg.hubAssetFetch !== undefined ? { hubAssetFetch: pluginCfg.hubAssetFetch } : {}),
   });
 
   darwinInstance.use(new Mutator({ mutationRate: pluginCfg.mutationRate || 0.05 }));
@@ -2046,8 +2048,8 @@ export default function register(api) {
     async handler(_req, res) {
       try {
         const darwin = await getDarwin(pluginCfg);
-        const earnings = await darwin.hub.getEarnings();
-        sendJson(res, 200, earnings ?? { total: 0 });
+        const payload = await buildEarningsApiPayload(darwin);
+        sendJson(res, 200, payload);
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }

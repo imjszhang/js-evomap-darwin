@@ -460,6 +460,7 @@
   }
   .active-task.task-failed { border-left: 3px solid var(--danger); }
   .active-task.task-ok { border-left: 3px solid var(--accent); }
+  .active-task.task-abandoned { border-left: 3px solid var(--accent2); }
   .active-task .at-header {
     display: flex;
     justify-content: space-between;
@@ -476,9 +477,10 @@
     font-weight: 600;
     text-transform: uppercase;
   }
-  .active-task .at-status.claimed   { color: var(--accent2); }
+  .active-task .at-status.claimed    { color: var(--accent2); }
   .active-task .at-status.completed { color: var(--accent); }
   .active-task .at-status.failed    { color: var(--danger); }
+  .active-task .at-status.abandoned { color: var(--accent2); }
   .active-task .at-meta {
     font-size: 10px;
     color: var(--dim);
@@ -665,6 +667,8 @@
   .chat-bubble.task-published { border-left-color: var(--accent4); }
   .chat-bubble.task-completed { border-left-color: var(--accent); }
   .chat-bubble.task-failed { border-left-color: var(--danger); }
+  .chat-bubble.task-abandoned { border-left-color: var(--accent2); }
+  .chat-bubble.task-reconciled { border-left-color: #c77dff; }
   .chat-bubble.bootstrap { border-left-color: var(--accent3); }
   .hub-health-row {
     display: flex;
@@ -758,6 +762,8 @@
   .evtlog-type.service-stop { color: var(--accent2); }
   .evtlog-type.task-completed { color: var(--accent); }
   .evtlog-type.task-failed { color: var(--danger); }
+  .evtlog-type.task-abandoned { color: var(--accent2); }
+  .evtlog-type.task-reconciled { color: #c77dff; }
   .evtlog-msg {
     flex: 1;
     overflow: hidden;
@@ -810,6 +816,7 @@
       <h2>Node Status</h2>
       <div id="statusPanel">
         <div class="stat-row"><span class="stat-label">Node ID</span><span class="stat-value" id="nodeId">—</span></div>
+        <div class="stat-row"><span class="stat-label">Reputation</span><span class="stat-value" id="reputationScore" title="From Hub GET /a2a/nodes (updated each heartbeat)">—</span></div>
         <div class="stat-row"><span class="stat-label">Gene Pool</span><span class="stat-value" id="geneCount">0 / 200</span></div>
         <div class="stat-row"><span class="stat-label">Tracked Capsules</span><span class="stat-value" id="trackedCount">0</span></div>
         <div class="stat-row"><span class="stat-label">Total Records</span><span class="stat-value" id="totalRecords">0</span></div>
@@ -829,6 +836,7 @@
           <span id="hbSurvival"><span class="survival-badge dead"><span class="badge-dot"></span>unknown</span></span>
         </div>
         <div class="stat-row"><span class="stat-label">Credits</span><span class="stat-value" id="hbCredits">—</span></div>
+        <div class="stat-row"><span class="stat-label">Ledger (local)</span><span class="stat-value" id="ledgerCredits" title="From credit-ledger.jsonl snapshots">—</span></div>
         <div class="stat-row"><span class="stat-label">Node Status</span><span class="stat-value" id="hbNodeStatus">—</span></div>
         <div class="stat-row"><span class="stat-label">Last Heartbeat</span><span class="stat-value" id="hbLastTime">—</span></div>
         <div class="stat-row">
@@ -976,11 +984,11 @@
 
     <div class="panel">
       <h2>My Tasks</h2>
-      <p class="panel-hint" style="font-size:11px;color:var(--dim);margin:-4px 0 10px;line-height:1.35">Local worker queue (auto-claim) and Hub bounty tasks from <code>/task/my</code>.</p>
+      <p class="panel-hint" style="font-size:11px;color:var(--dim);margin:-4px 0 10px;line-height:1.35">Local worker queue (auto-claim), Hub <code>/task/my</code>, and history including <code>abandoned</code> / Hub-reconciled rows.</p>
       <div id="myTasksPanel">
         <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px">Active</div>
         <div id="activeTasks"><div style="color:var(--dim)">No active tasks</div></div>
-        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px; margin-top:12px">Completed (recent)</div>
+        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px; margin-top:12px">History (recent)</div>
         <div id="completedTasks" style="max-height:260px; overflow-y:auto"><div style="color:var(--dim)">No completed tasks</div></div>
       </div>
     </div>
@@ -1054,7 +1062,9 @@
 
 <script>
 const IS_PLUGIN_MODE = location.pathname.startsWith('/plugins/');
-const API_BASE = IS_PLUGIN_MODE ? `${location.origin}/plugins/js-evomap-darwin/api` : null;
+const API_BASE = IS_PLUGIN_MODE
+  ? `${location.origin}/plugins/js-evomap-darwin/api`
+  : `${location.origin}/api`;
 const WS_URL = IS_PLUGIN_MODE ? null : `ws://${location.host}/ws`;
 const AVATAR_URL = IS_PLUGIN_MODE
   ? `${location.origin}/plugins/js-evomap-darwin/assets/avatar.png`
@@ -1187,6 +1197,13 @@ const revSourceChart = new Chart(revSourceCtx, {
   }
 });
 
+/** Coerce Hub / heartbeat credit_balance (number or numeric string) for UI math. */
+function toCreditNumber(v) {
+  if (v === null || v === undefined) return null;
+  const n = typeof v === 'number' ? v : Number(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
 function updateRevolution(rev) {
   if (!rev) return;
   const pct = Math.round(rev.readiness * 100);
@@ -1239,9 +1256,10 @@ function updateRevolution(rev) {
     ageEl.textContent = '—';
     ageEl.className = 'value';
   }
-  if (hh.creditBalance !== null && hh.creditBalance !== undefined) {
-    creditsEl.textContent = hh.creditBalance.toLocaleString();
-    creditsEl.className = 'value' + (hh.creditBalance < 10 ? ' danger' : hh.creditBalance < 50 ? ' warn' : '');
+  const credN = toCreditNumber(hh.creditBalance);
+  if (credN !== null) {
+    creditsEl.textContent = credN.toLocaleString();
+    creditsEl.className = 'value' + (credN < 10 ? ' danger' : credN < 50 ? ' warn' : '');
   }
 }
 
@@ -1255,6 +1273,7 @@ let sseInitApplied = false;
 let sseInitFallbackTimer = null;
 const SSE_FALLBACK_THRESHOLD = 3;
 const SSE_INIT_FALLBACK_MS = 2000;
+let standaloneEarningsTimer = null;
 
 function connect() {
   if (IS_PLUGIN_MODE) {
@@ -1339,10 +1358,15 @@ function connectWS() {
   ws.onopen = () => {
     document.getElementById('statusDot').classList.add('online');
     document.getElementById('statusText').textContent = 'Connected';
+    startStandaloneEarningsPoll();
   };
   ws.onclose = () => {
     document.getElementById('statusDot').classList.remove('online');
     document.getElementById('statusText').textContent = 'Reconnecting...';
+    if (standaloneEarningsTimer) {
+      clearInterval(standaloneEarningsTimer);
+      standaloneEarningsTimer = null;
+    }
     reconnectTimer = setTimeout(connectWS, 3000);
   };
   ws.onmessage = (evt) => {
@@ -1412,6 +1436,29 @@ function handleMessage(msg) {
 
 function updateStatus(s) {
   document.getElementById('nodeId').textContent = s.nodeId ? s.nodeId.slice(0, 20) + '...' : '—';
+
+  const repEl = document.getElementById('reputationScore');
+  const nr = s.nodeReputation;
+  if (repEl) {
+    const raw = nr?.reputationScore;
+    const v = raw != null && raw !== '' ? Number(raw) : NaN;
+    if (Number.isFinite(v)) {
+      repEl.textContent = v.toFixed(2);
+      let cls = 'stat-value';
+      if (v >= 60) cls += ' good';
+      else if (v < 30) cls += ' danger';
+      repEl.className = cls;
+      const extra = [];
+      if (nr.online === true) extra.push('online');
+      if (nr.totalPublished != null) extra.push(`${nr.totalPublished} published`);
+      repEl.title = `Hub /a2a/nodes${nr.fetchedAt ? ` · ${nr.fetchedAt}` : ''}${extra.length ? ' · ' + extra.join(', ') : ''}`;
+    } else {
+      repEl.textContent = '—';
+      repEl.className = 'stat-value';
+      repEl.title = 'From Hub after successful heartbeat (not yet loaded or unavailable)';
+    }
+  }
+
   document.getElementById('geneCount').textContent = `${s.geneStore?.size ?? 0} / ${s.geneStore?.capacity ?? 200}`;
   document.getElementById('trackedCount').textContent = s.fitness?.trackedCapsules ?? 0;
   document.getElementById('totalRecords').textContent = s.fitness?.totalRecords ?? 0;
@@ -1456,6 +1503,21 @@ function updateStatus(s) {
   if (s.worker) updateWorker(s.worker);
 
   if (s.heartbeat) updateHeartbeat(s.heartbeat);
+
+  const lc = document.getElementById('ledgerCredits');
+  if (lc && s.credits) {
+    const bal = toCreditNumber(s.credits.currentBalance);
+    if (bal !== null) {
+      lc.textContent = bal.toLocaleString();
+      lc.className = 'stat-value' + (bal < 10 ? ' danger' : bal < 50 ? ' warn' : '');
+      if (s.credits.snapshotCount != null) {
+        lc.title = `Ledger snapshots: ${s.credits.snapshotCount} (credit-ledger.jsonl)`;
+      }
+    } else {
+      lc.textContent = '—';
+      lc.className = 'stat-value';
+    }
+  }
 }
 
 function updateGenes(genes) {
@@ -1600,11 +1662,20 @@ function updateHeartbeat(hb, historyArr) {
   document.getElementById('hbSurvival').innerHTML =
     `<span class="survival-badge ${badgeClass}"><span class="badge-dot"></span>${survival}</span>`;
 
-  // Credits
-  const credits = hb.creditBalance ?? raw.credit_balance ?? '—';
+  // Credits (Hub may send string decimals)
   const credEl = document.getElementById('hbCredits');
-  credEl.textContent = typeof credits === 'number' ? credits.toLocaleString() : credits;
-  credEl.className = 'stat-value' + (credits > 0 ? ' good' : '');
+  const credN = toCreditNumber(hb.creditBalance ?? raw.credit_balance);
+  if (credN !== null) {
+    credEl.textContent = credN.toLocaleString();
+    let c = 'stat-value';
+    if (credN < 10) c += ' danger';
+    else if (credN < 50) c += ' warn';
+    else if (credN > 0) c += ' good';
+    credEl.className = c;
+  } else {
+    credEl.textContent = '—';
+    credEl.className = 'stat-value';
+  }
 
   // Node status
   const nodeStatus = raw.node_status || '—';
@@ -1643,12 +1714,12 @@ function updateCreditChart(hb, historyArr) {
       const t = h.timestamp;
       return t ? t.slice(11, 16) : '';
     });
-    creditChart.data.datasets[0].data = historyArr.map((h) => h.creditBalance ?? 0);
+    creditChart.data.datasets[0].data = historyArr.map((h) => toCreditNumber(h.creditBalance) ?? 0);
     creditChart.update('none');
     return;
   }
 
-  const bal = hb.creditBalance ?? hb.raw?.credit_balance ?? 0;
+  const bal = toCreditNumber(hb.creditBalance ?? hb.raw?.credit_balance) ?? 0;
   const now = new Date().toISOString().slice(11, 16);
   creditHistory.push(bal);
   creditChart.data.labels.push(now);
@@ -1837,7 +1908,8 @@ function renderStepIcon(ok, label) {
 function renderTaskCard(t) {
   const isFailed = t.status === 'failed';
   const isCompleted = t.status === 'completed';
-  const cls = isFailed ? 'task-failed' : isCompleted ? 'task-ok' : '';
+  const isAbandoned = t.status === 'abandoned';
+  const cls = isFailed ? 'task-failed' : isCompleted ? 'task-ok' : isAbandoned ? 'task-abandoned' : '';
 
   let detailHtml = '';
   if (t.matchScore != null) {
@@ -1857,7 +1929,7 @@ function renderTaskCard(t) {
       <span class="at-step-arrow">&#8594;</span>
       ${renderStepIcon(t.publishOk, 'publish')}
       <span class="at-step-arrow">&#8594;</span>
-      ${renderStepIcon(isCompleted ? true : isFailed ? false : null, 'complete')}
+      ${renderStepIcon(isCompleted ? true : (isFailed || isAbandoned) ? false : null, 'complete')}
     </div>`;
   } else if (t.taskSource === 'hub' && (isCompleted || isFailed)) {
     detailHtml += `<div class="at-steps">
@@ -1868,19 +1940,22 @@ function renderTaskCard(t) {
   if (t.hubContribution != null) {
     detailHtml += `<div class="at-contrib">contribution: ${t.hubContribution}</div>`;
   }
-  if (isFailed && t.error) {
-    detailHtml += `<div class="at-meta" style="color:var(--danger)">${t.error}</div>`;
+  if ((isFailed || isAbandoned) && t.error) {
+    const errColor = isAbandoned ? 'var(--accent2)' : 'var(--danger)';
+    detailHtml += `<div class="at-meta" style="color:${errColor}">${t.error}</div>`;
   }
 
   const timeLabel = isFailed
     ? `failed ${timeAgo(t.failedAt || t.claimedAt)}`
     : isCompleted
       ? `completed ${timeAgo(t.completedAt)}`
-      : `claimed ${timeAgo(t.claimedAt)}`;
+      : isAbandoned
+        ? `abandoned ${timeAgo(t.abandonedAt || t.claimedAt)}`
+        : `claimed ${timeAgo(t.claimedAt)}`;
 
   const bountyHtml = (t.bounty ?? 0) > 0
     ? `<span class="bounty-amount">¤${Number(t.bounty).toFixed(0)}</span>`
-    : isCompleted || isFailed
+    : isCompleted || isFailed || isAbandoned
       ? '<span class="bounty-amount zero">Free</span>'
       : '';
 
@@ -2103,30 +2178,47 @@ async function loadEventLog() {
 }
 
 async function loadEarnings() {
-  if (!API_BASE) return;
   const el = document.getElementById('hbEarnings');
   try {
     const res = await fetch(`${API_BASE}/earnings`);
-    const data = await res.json();
-    if (!res.ok || data?.error) {
+    const data = await res.json().catch(() => ({}));
+    const fromApi = toCreditNumber(data.total);
+    const localOnly = toCreditNumber(data.localTotalEarned);
+    const display = fromApi !== null ? fromApi : localOnly;
+    if (!res.ok && display === null) {
       el.textContent = 'N/A';
       el.className = 'stat-value';
       el.title = data?.error || `HTTP ${res.status}`;
       return;
     }
-    if (data && data.total != null) {
-      el.textContent = data.total.toLocaleString();
-      el.className = 'stat-value' + (data.total > 0 ? ' good' : '');
-    } else if (data && data.earned != null) {
-      el.textContent = data.earned.toLocaleString();
-      el.className = 'stat-value' + (data.earned > 0 ? ' good' : '');
+    if (display !== null) {
+      el.textContent = display.toLocaleString();
+      el.className = 'stat-value' + (display > 0 ? ' good' : '');
+      if (data.hubError) {
+        el.title = `Hub: ${data.hubError}. Showing local task bounty sum when Hub total unavailable.`;
+      } else if (fromApi === null && localOnly !== null) {
+        el.title = 'Local task bounties (credit-ledger); Hub earnings endpoint unavailable or empty.';
+      } else {
+        el.title = data.hubTotal != null && data.localTotalEarned != null
+          ? `Hub total: ${data.hubTotal.toLocaleString()} · Local bounties recorded: ${data.localTotalEarned.toLocaleString()}`
+          : '';
+      }
     } else {
-      el.textContent = '0';
-      el.className = 'stat-value';
+      const legacy = toCreditNumber(data?.payload?.total ?? data?.payload?.earned ?? data?.earned);
+      if (legacy !== null) {
+        el.textContent = legacy.toLocaleString();
+        el.className = 'stat-value' + (legacy > 0 ? ' good' : '');
+        el.title = '';
+      } else {
+        el.textContent = '0';
+        el.className = 'stat-value';
+        el.title = '';
+      }
     }
-  } catch {
+  } catch (e) {
     el.textContent = 'N/A';
     el.className = 'stat-value';
+    el.title = e?.message || 'fetch failed';
   }
 }
 
@@ -2136,6 +2228,13 @@ function startHealthPolling() {
   loadEventLog();
   loadEarnings();
   sysHealthTimer = setInterval(() => { pollHealth(); loadEarnings(); }, 30_000);
+}
+
+function startStandaloneEarningsPoll() {
+  loadEarnings();
+  if (!standaloneEarningsTimer) {
+    standaloneEarningsTimer = setInterval(loadEarnings, 30_000);
+  }
 }
 
 if (!IS_PLUGIN_MODE) {

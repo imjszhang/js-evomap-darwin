@@ -149,8 +149,13 @@ export class PeerExchange {
           this.#addPeer(fromId);
           if (payload.top && Array.isArray(payload.top)) {
             for (const gene of payload.top) {
-              // If we don't have this gene and peer reports high fitness, fetch it
-              if (!darwin.store.has(gene.asset_id) && gene.fitness > 0.5 && gene.samples >= 5) {
+              // If we don't have this gene and peer reports high fitness, fetch it (unless contributor-only)
+              if (
+                darwin.hubAssetFetchEnabled &&
+                !darwin.store.has(gene.asset_id) &&
+                gene.fitness > 0.5 &&
+                gene.samples >= 5
+              ) {
                 try {
                   const res = await darwin.hub.fetch({ assetIds: [gene.asset_id] });
                   const assets = res?.payload?.assets || res?.assets || [];

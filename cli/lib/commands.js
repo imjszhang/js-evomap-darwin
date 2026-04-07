@@ -9,12 +9,13 @@ import { TaskMatcher } from "../../src/task-matcher.js";
 
 const DATA_DIR = process.env.DARWIN_DATA_DIR || "./data";
 
-function createDarwin({ withWorker = false, legacyPeers = false } = {}) {
+function createDarwin({ withWorker = false, legacyPeers = false, hubAssetFetch } = {}) {
   const darwin = new Darwin({
     hubUrl: process.env.HUB_URL,
     dataDir: DATA_DIR,
     nodeId: process.env.NODE_ID,
     nodeSecret: process.env.NODE_SECRET,
+    ...(hubAssetFetch !== undefined ? { hubAssetFetch } : {}),
   });
   darwin.use(new Mutator());
 
@@ -564,6 +565,12 @@ async function cmdWorker(args) {
 
   const worker = darwin.worker;
 
+  try {
+    await worker.reconcileAssignments(darwin);
+  } catch {
+    /* Hub unreachable — continue with cached worker-state */
+  }
+
   if (flags.enable) {
     const domains = flags.domains ? flags.domains.split(",") : undefined;
     console.log("\n  Registering as worker...\n");
@@ -674,9 +681,11 @@ async function cmdWorker(args) {
   }
 
   if (stats.completedHistory.length > 0) {
-    console.log("  ── Recent Completed ──");
+    console.log("  ── Recent Task History ──");
     for (const t of stats.completedHistory) {
-      console.log(`  ${t.taskId?.slice(0, 16) || "?"}  ${t.title || "(untitled)"}  bounty: ${t.bounty ?? "?"}  at: ${t.completedAt}`);
+      const when = t.completedAt || t.abandonedAt || t.failedAt || t.reconciledAt || "?";
+      const state = t.status ? ` [${t.status}]` : "";
+      console.log(`  ${t.taskId?.slice(0, 16) || "?"}  ${t.title || "(untitled)"}  bounty: ${t.bounty ?? "?"}  at: ${when}${state}`);
     }
     console.log("");
   }
@@ -1739,6 +1748,9 @@ function cmdHelp() {
     NODE_ID         Node identity (auto-saved after init)
     NODE_SECRET     Node secret (auto-saved after init)
     DARWIN_DATA_DIR Data directory (default: ./data)
+    DARWIN_STALE_CLAIM_MS  Abandon local worker claims older than this (default: 48h)
+    DARWIN_CONTRIBUTOR_ONLY  Default contributor mode; 1/true/on forces no Hub pull; 0/false/off/no allows pull
+    DARWIN_HUB_ASSET_FETCH   1/true/on allows Hub Capsule pull; 0/false/off/no disables (default when unset: no pull)
 `);
 }
 

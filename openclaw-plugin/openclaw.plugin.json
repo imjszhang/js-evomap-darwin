@@ -67,6 +67,11 @@
         "type": "boolean",
         "default": true,
         "description": "Automatically claim and complete matched tasks (set false to disable auto-earning)"
+      },
+      "hubAssetFetch": {
+        "type": "boolean",
+        "default": false,
+        "description": "When true, pull Capsules from Hub (evolve + task gap fetch). Default false = contributor-first; use env DARWIN_HUB_ASSET_FETCH=1 to enable without plugin config."
       }
     }
   },
@@ -133,6 +138,11 @@
     "workerAutoSubmit": {
       "label": "Worker Auto-Submit",
       "help": "Automatically claim and complete matched tasks for credit earning. Disable to require manual approval.",
+      "advanced": true
+    },
+    "hubAssetFetch": {
+      "label": "Hub Capsule Fetch",
+      "help": "Default off (contributor-first). Enable to pull Capsules from Hub on evolve/heartbeat gap; heartbeat and worker always run.",
       "advanced": true
     }
   }

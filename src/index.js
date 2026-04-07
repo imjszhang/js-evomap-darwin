@@ -5,6 +5,7 @@ import { GeneStore } from "./gene-store.js";
 import { FitnessTracker } from "./fitness-tracker.js";
 import { CapsuleSelector } from "./capsule-selector.js";
 import { BootstrapEvaluator } from "./bootstrap-evaluator.js";
+import { CreditLedger } from "./credit-ledger.js";
 import { getAllMetaGenes } from "./meta-genes.js";
 
 export { HubClient } from "./hub-client.js";
@@ -18,11 +19,42 @@ export { TaskMatcher } from "./task-matcher.js";
 export { Subscription } from "./subscription.js";
 export { TrustPolicy } from "./trust-policy.js";
 export { PeerGraph } from "./peer-graph.js";
+export { CapsuleFactory } from "./capsule-factory.js";
+export { CreditLedger } from "./credit-ledger.js";
 
 const DEFAULT_HEARTBEAT_MS = 300_000; // 5 min (EvoMap official recommendation)
 const DEFAULT_EVOLVE_MS = 4 * 60 * 60 * 1000; // 4 hours
 const MAX_INGEST_PER_CYCLE = 10;
 const CAPACITY_CAUTIOUS_RATIO = 0.9;
+const SIGNAL_FETCH_DEBOUNCE_MS = 60 * 60 * 1000; // 1 hour per signal
+const MAX_GAP_FETCH_PER_HEARTBEAT = 3;
+const FETCH_UTILIZATION_WINDOW = 10;
+const FETCH_UTIL_LOW = 0.1;      // < 10%: skip full fetch, searchOnly only
+const FETCH_UTIL_MID = 0.3;      // 10-30%: restrict to top N signals only
+const MAX_SIGNALS_THROTTLED = 3;
+
+/**
+ * Hub Capsule pull from env when constructor does not pass hubAssetFetch.
+ * Default (no relevant env): false = contributor-first, no Hub /a2a/fetch pulls.
+ * DARWIN_CONTRIBUTOR_ONLY: 1/true/yes/on → off; 0/false/off/no → allow pull.
+ * DARWIN_HUB_ASSET_FETCH: 1/true/yes/on → allow pull; 0/false/off/no → off.
+ * CONTRIBUTOR_ONLY is evaluated first when both are set.
+ */
+function resolveEnvHubAssetFetchEnabled() {
+  const c = process.env.DARWIN_CONTRIBUTOR_ONLY;
+  if (c != null && String(c).trim() !== "") {
+    const v = String(c).trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(v)) return false;
+    if (["0", "false", "off", "no"].includes(v)) return true;
+  }
+  const h = process.env.DARWIN_HUB_ASSET_FETCH;
+  if (h != null && String(h).trim() !== "") {
+    const v = String(h).trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(v)) return true;
+    if (["0", "false", "off", "no"].includes(v)) return false;
+  }
+  return false;
+}
 
 /**
  * Darwin — the evolution engine.
@@ -39,6 +71,7 @@ export class Darwin {
   #subscription;
   #sponsor;
   #taskMatcher;
+  #creditLedger;
   #dataDir;
   #credentialsPath;
 
@@ -52,6 +85,13 @@ export class Darwin {
   #taskBuffer = new Map(); // task_id -> { task, missedHeartbeats }
   #taskBufferMaxAge = 3;   // evict after missing from N consecutive heartbeats
   #nextHeartbeatMs;
+  #signalFetchDebounce = new Map(); // signal -> lastFetchTimestamp
+  #fetchUtilHistory = [];           // sliding window: { ingested, total, usedInTask }
+  #fetchedAssetIds = new Set();     // asset_ids fetched in recent cycles, cleared on task match
+  /** Cached from GET /a2a/nodes/:id after each successful heartbeat (for dashboard / status). */
+  #nodeReputationCache = null;
+  /** When false: skip fetchAndIngest and heartbeat gap fetch (contributor-first; no Hub capsule pull). */
+  #hubAssetFetchEnabled;
 
   constructor({
     hubUrl,
@@ -60,6 +100,7 @@ export class Darwin {
     explorationRate = 0.1,
     nodeId,
     nodeSecret,
+    hubAssetFetch,
   } = {}) {
     this.#dataDir = dataDir;
     mkdirSync(dataDir, { recursive: true });
@@ -85,11 +126,19 @@ export class Darwin {
     this.#subscription = null;
     this.#sponsor = null;
     this.#taskMatcher = null;
+    this.#creditLedger = new CreditLedger({ dataDir });
+
+    this.#hubAssetFetchEnabled =
+      hubAssetFetch !== undefined ? !!hubAssetFetch : resolveEnvHubAssetFetchEnabled();
 
     this.#seedMetaGenes();
   }
 
   get hub() { return this.#hub; }
+  /** Whether Darwin may call Hub /a2a/fetch to pull Capsules (evolve + gap + legacy peer path). */
+  get hubAssetFetchEnabled() {
+    return this.#hubAssetFetchEnabled;
+  }
   get store() { return this.#store; }
   get tracker() { return this.#tracker; }
   get selector() { return this.#selector; }
@@ -98,6 +147,7 @@ export class Darwin {
   get subscription() { return this.#subscription; }
   get sponsor() { return this.#sponsor; }
   get worker() { return this.#taskMatcher; }
+  get creditLedger() { return this.#creditLedger; }
   get lastHeartbeat() { return this.#lastHeartbeatResult; }
 
   /**
@@ -196,13 +246,30 @@ export class Darwin {
   /**
    * Fetch capsules from Hub and ingest into local gene store.
    * Uses a two-phase strategy: search_only first (free), then targeted fetch.
+   * Applies dynamic throttling based on recent fetch utilization.
    */
   async fetchAndIngest(signals) {
     const cautious = this.#store.size >= this.#store.capacity * CAPACITY_CAUTIOUS_RATIO;
+    const utilRate = this.#getFetchUtilization();
+
+    // Dynamic throttling: restrict signals when utilization is below mid threshold
+    let effectiveSignals = signals;
+    if (utilRate < FETCH_UTIL_MID && Array.isArray(signals) && signals.length > MAX_SIGNALS_THROTTLED) {
+      effectiveSignals = signals.slice(0, MAX_SIGNALS_THROTTLED);
+      this.#emit("fetch-throttled", { utilRate, originalSignals: signals.length, effective: effectiveSignals.length });
+    }
 
     // Phase 1: free metadata scan
-    const preview = await this.#hub.fetch({ signals, searchOnly: true });
+    const preview = await this.#hub.fetch({ signals: effectiveSignals, searchOnly: true });
     const candidates = preview?.payload?.assets || preview?.assets || [];
+
+    // Skip full fetch entirely when utilization is critically low
+    if (utilRate < FETCH_UTIL_LOW && this.#fetchUtilHistory.length >= 3) {
+      const skipped = candidates.length;
+      this.#recordFetchUtil(0, candidates.length);
+      this.#emit("fetch", { total: candidates.length, ingested: 0, skipped, rejected: 0, throttled: true });
+      return { total: candidates.length, ingested: 0, skipped, rejected: 0 };
+    }
 
     // Phase 2: filter to Capsules we don't already have, capped per cycle
     const needed = [];
@@ -213,10 +280,9 @@ export class Darwin {
       }
     }
 
-    // In cautious mode (>= 90% full), skip the costly fetch entirely
-    // — GeneStore.add() would reject most fitness=0 entries anyway.
     if (cautious && needed.length > 0 && this.#store.lowestFitness > 0) {
       const skipped = candidates.length - needed.length;
+      this.#recordFetchUtil(0, candidates.length);
       this.#emit("fetch", { total: candidates.length, ingested: 0, skipped, rejected: needed.length });
       return { total: candidates.length, ingested: 0, skipped, rejected: needed.length };
     }
@@ -231,15 +297,46 @@ export class Darwin {
         if (asset.type === "Capsule" && asset.asset_id) {
           const existingFitness = this.#tracker.getFitness(asset.asset_id);
           const added = this.#store.add(asset, existingFitness ?? 0, "hub");
-          if (added) ingested++;
-          else rejected++;
+          if (added) {
+            ingested++;
+            this.#fetchedAssetIds.add(asset.asset_id);
+          } else {
+            rejected++;
+          }
         }
       }
     }
 
+    if (needed.length > 0) {
+      this.#creditLedger.recordSpend({ spendType: "fetch", signals: effectiveSignals || [], count: ingested });
+    }
+
+    this.#recordFetchUtil(ingested, candidates.length);
     const skipped = candidates.length - needed.length;
-    this.#emit("fetch", { total: candidates.length, ingested, skipped, rejected });
+    this.#emit("fetch", { total: candidates.length, ingested, skipped, rejected, utilRate });
     return { total: candidates.length, ingested, skipped, rejected };
+  }
+
+  #recordFetchUtil(ingested, total) {
+    this.#fetchUtilHistory.push({ ingested, total, timestamp: Date.now() });
+    if (this.#fetchUtilHistory.length > FETCH_UTILIZATION_WINDOW) {
+      this.#fetchUtilHistory.splice(0, this.#fetchUtilHistory.length - FETCH_UTILIZATION_WINDOW);
+    }
+  }
+
+  #getFetchUtilization() {
+    if (this.#fetchUtilHistory.length === 0) return 1;
+    const totalIngested = this.#fetchUtilHistory.reduce((s, e) => s + e.ingested, 0);
+    const totalCandidates = this.#fetchUtilHistory.reduce((s, e) => s + e.total, 0);
+    return totalCandidates > 0 ? totalIngested / totalCandidates : 1;
+  }
+
+  /**
+   * Mark a fetched asset as utilized (called when it matches a task).
+   * Used by external callers (TaskMatcher) to feed utilization tracking.
+   */
+  markFetchUtilized(assetId) {
+    this.#fetchedAssetIds.delete(assetId);
   }
 
   /**
@@ -329,6 +426,9 @@ export class Darwin {
       hasSponsor: !!this.#sponsor,
       sponsor: this.#sponsor?.getStats() ?? null,
       worker: this.#taskMatcher?.getStats() ?? null,
+      nodeReputation: this.#nodeReputationCache,
+      hubAssetFetch: this.#hubAssetFetchEnabled,
+      credits: this.#creditLedger.getSummary(),
       leaderboard: this.#tracker.rankByModel?.() ?? [],
       heartbeat: hb ? {
         timestamp: hb.timestamp || new Date().toISOString(),
@@ -456,15 +556,44 @@ export class Darwin {
       if (res.nextHeartbeatMs && res.nextHeartbeatMs > 0) {
         this.#nextHeartbeatMs = res.nextHeartbeatMs;
       }
+      this.#creditLedger.recordBalance(res.creditBalance, res.timestamp);
       this.#processPendingEvents(res.pendingEvents);
 
       // Accumulate tasks across heartbeats so none are lost between cycles
       const freshTasks = res.raw?.available_tasks || res.availableWork || [];
       this.#updateTaskBuffer(freshTasks);
 
+      // On-demand fetch: fill gene pool gaps for available task signals
+      const credits = res.creditBalance;
+      const lowCredit = typeof credits === "number" && credits < 10;
+      if (this.#hubAssetFetchEnabled && !lowCredit && freshTasks.length > 0) {
+        try { await this.#fetchGapSignals(freshTasks); } catch { /* best effort */ }
+      }
+
       // Task matching on every heartbeat (decoupled from 4h evolve cycle)
       if (this.#taskMatcher && typeof this.#taskMatcher.cycle === "function") {
-        try { await this.#taskMatcher.cycle(this); } catch { /* best effort */ }
+        try { await this.#taskMatcher.cycle(this); } catch (err) {
+          this.#emit("error", { phase: "task-cycle", error: err.message });
+        }
+      }
+
+      try {
+        if (this.#hub.nodeId) {
+          const ni = await this.#hub.getNodeInfo();
+          const p = ni?.payload ?? ni;
+          if (p && typeof p === "object") {
+            this.#nodeReputationCache = {
+              reputationScore: p.reputation_score ?? null,
+              reputationPenalty: p.reputation_penalty ?? null,
+              totalPublished: p.total_published ?? null,
+              online: p.online ?? null,
+              survivalStatus: p.survival_status ?? null,
+              fetchedAt: new Date().toISOString(),
+            };
+          }
+        }
+      } catch {
+        /* keep previous cache on Hub errors */
       }
 
       this.#emit("heartbeat", res);
@@ -520,6 +649,60 @@ export class Darwin {
           this.#taskBuffer.delete(id);
         }
       }
+    }
+  }
+
+  /**
+   * Fetch Capsules for task signals that have no local match (gap signals).
+   * Debounced per signal to avoid repeatedly fetching the same dead-end.
+   */
+  async #fetchGapSignals(tasks) {
+    const now = Date.now();
+    const gapSignals = [];
+
+    for (const task of tasks) {
+      const sigs = (task.signals || "").split(",").map((s) => s.trim()).filter(Boolean);
+      for (const sig of sigs) {
+        if (this.#store.findByTaskType(sig).length > 0) continue;
+        const lastFetch = this.#signalFetchDebounce.get(sig) || 0;
+        if (now - lastFetch < SIGNAL_FETCH_DEBOUNCE_MS) continue;
+        if (!gapSignals.includes(sig)) gapSignals.push(sig);
+      }
+    }
+
+    if (gapSignals.length === 0) return;
+
+    const toFetch = gapSignals.slice(0, MAX_GAP_FETCH_PER_HEARTBEAT);
+    for (const sig of toFetch) {
+      this.#signalFetchDebounce.set(sig, now);
+    }
+
+    try {
+      const preview = await this.#hub.fetch({ signals: toFetch, searchOnly: true });
+      const candidates = preview?.payload?.assets || preview?.assets || [];
+      const needed = [];
+      for (const asset of candidates) {
+        if (needed.length >= MAX_GAP_FETCH_PER_HEARTBEAT) break;
+        if (asset.type === "Capsule" && asset.asset_id && !this.#store.has(asset.asset_id)) {
+          needed.push(asset.asset_id);
+        }
+      }
+
+      if (needed.length > 0) {
+        const full = await this.#hub.fetch({ assetIds: needed });
+        const assets = full?.payload?.assets || full?.assets || [];
+        let ingested = 0;
+        for (const asset of assets) {
+          if (asset.type === "Capsule" && asset.asset_id) {
+            if (this.#store.add(asset, 0, "hub")) ingested++;
+          }
+        }
+        if (ingested > 0) {
+          this.#emit("gap-fetch", { signals: toFetch, ingested });
+        }
+      }
+    } catch {
+      // Gap fetch is best-effort
     }
   }
 
@@ -581,6 +764,33 @@ export class Darwin {
     return [...signals];
   }
 
+  /**
+   * Returns a Set of signal strings (lowercased) that are covered by active
+   * P2P subscriptions with sufficient trust and recent delivery activity.
+   */
+  #getSubscriptionCoveredSignals() {
+    const covered = new Set();
+    if (!this.#subscription) return covered;
+
+    const STALE_MS = 7 * 24 * 60 * 60 * 1000;
+    const MIN_TRUST = 0.5;
+    const now = Date.now();
+
+    for (const sub of this.#subscription.getSubscriptions()) {
+      if ((sub.trust ?? 0) < MIN_TRUST) continue;
+      if (sub.lastDelivery) {
+        const age = now - new Date(sub.lastDelivery).getTime();
+        if (age > STALE_MS) continue;
+      } else {
+        continue;
+      }
+      for (const topic of (sub.topics || [])) {
+        covered.add(topic.toLowerCase());
+      }
+    }
+    return covered;
+  }
+
   async #doEvolveCycle() {
     try {
       // 0. Check credit balance — skip fetch when credits are low
@@ -591,9 +801,24 @@ export class Darwin {
       }
 
       // 1. Fetch new capsules (signal-directed when possible; skip when low on credits)
+      //    Skip signals already covered by active P2P subscriptions to save credits.
       if (!lowCredit) {
-        const signals = this.#getActiveSignals();
-        await this.fetchAndIngest(signals.length > 0 ? signals : undefined);
+        if (this.#hubAssetFetchEnabled) {
+          let signals = this.#getActiveSignals();
+          if (signals.length > 0 && this.#subscription) {
+            const coveredSignals = this.#getSubscriptionCoveredSignals();
+            if (coveredSignals.size > 0) {
+              const before = signals.length;
+              signals = signals.filter((s) => !coveredSignals.has(s.toLowerCase()));
+              if (signals.length < before) {
+                this.#emit("sub-skip-fetch", { skipped: before - signals.length, covered: coveredSignals.size });
+              }
+            }
+          }
+          await this.fetchAndIngest(signals.length > 0 ? signals : undefined);
+        } else {
+          this.#emit("hub-fetch-skipped", { reason: "disabled", phase: "evolve" });
+        }
       }
 
       // 2. Agent-driven evolution (preferred) or fallback to Mutator
@@ -601,8 +826,8 @@ export class Darwin {
         try {
           await this.#agentCallback(this);
           this.#emit("evolve-think", { timestamp: new Date().toISOString() });
-        } catch {
-          // Agent unavailable — fall through to hardcoded fallback below
+        } catch (err) {
+          this.#emit("error", { phase: "agent-callback", error: err.message });
         }
       }
 

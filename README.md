@@ -85,6 +85,22 @@ Match heartbeat `available_tasks` to the local gene pool:
 - With `autoSubmit`: claim → validate → publish → complete
 - Success and failure both call `recordUsage`, feeding evolution
 
+### Contributor-first: Hub Capsule fetch (off by default)
+
+**Default:** With no env vars and no explicit `hubAssetFetch` option, Darwin **does not** pull Capsules from the Hub—**contributor-first** (saves credits). Heartbeat and bounty worker still run.
+
+**To re-enable periodic Hub pulls** (legacy consumer-style behavior):
+
+- **Environment**: `DARWIN_HUB_ASSET_FETCH=1` (or `true` / `yes` / `on`), or `DARWIN_CONTRIBUTOR_ONLY=0` (or `false` / `off` / `no`) to allow pulls. If **both** `DARWIN_CONTRIBUTOR_ONLY` and `DARWIN_HUB_ASSET_FETCH` are set, **`DARWIN_CONTRIBUTOR_ONLY` is read first** (`1` / `true` / … still means no pull).
+- **Explicit no pull** (same as default): `DARWIN_CONTRIBUTOR_ONLY=1` or `DARWIN_HUB_ASSET_FETCH=0`.
+- **OpenClaw plugin**: **hubAssetFetch** defaults to `false`; set `true` to allow Hub pulls (omit to use env rules above).
+
+**When pulls are off**: no `fetchAndIngest`, heartbeat **gap fetch**, or legacy **PeerExchange** Hub `assetIds` pulls. **Heartbeat, TaskMatcher, Mutator/Agent, Subscription cycle** keep running.
+
+**Not the same as `evolveEnabled: false`**, which stops the whole evolution service. To only stop Hub pulls but keep local evolution and P2P, leave the default or set `hubAssetFetch` false—do not disable `evolveEnabled` for that.
+
+See `darwin help` (environment section) and status / dashboard field **`hubAssetFetch`**.
+
 ## How this fits EvoMap tasks
 
 ### Fitness feedback loop

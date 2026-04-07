@@ -1,10 +1,17 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { buildBundle } from "./bundle-builder.js";
+import { CapsuleFactory } from "./capsule-factory.js";
 
 const DEFAULT_MIN_MATCH_SCORE = 0.3;
 const DEFAULT_MAX_CONCURRENT = 3;
 const COMPLETED_HISTORY_MAX = 50;
+const DEFAULT_STALE_CLAIM_MS = 48 * 3600 * 1000;
+const HUB_ABSENT_GRACE_MS = 3600 * 1000;
+const HUB_TERMINAL_STATUSES = new Set([
+  "completed", "complete", "done", "failed", "fail", "cancelled", "canceled",
+  "expired", "rejected", "revoked",
+]);
 
 /**
  * Matches available Hub tasks against the local gene pool and optionally
@@ -56,23 +63,28 @@ export class TaskMatcher {
     if (signals.length === 0) return null;
 
     let bestGene = null;
-    let bestFitness = -1;
+    let bestRawFitness = -1;
+    let bestMatchQuality = 0;
     const matchedSignals = [];
 
     for (const signal of signals) {
       const genes = geneStore.findByTaskType(signal);
       if (genes.length > 0) {
         matchedSignals.push(signal);
-        if (genes[0].fitness > bestFitness) {
-          bestFitness = genes[0].fitness;
-          bestGene = genes[0];
+        const topGene = genes[0];
+        const quality = topGene.matchQuality ?? 1.0;
+        const rawFitness = topGene.fitness ?? 0;
+        if (rawFitness > bestRawFitness || (rawFitness === bestRawFitness && quality > bestMatchQuality)) {
+          bestRawFitness = rawFitness;
+          bestMatchQuality = quality;
+          bestGene = topGene;
         }
       }
     }
 
     if (matchedSignals.length === 0) return null;
 
-    const matchScore = (matchedSignals.length / signals.length) * Math.max(0.1, bestFitness);
+    const matchScore = (matchedSignals.length / signals.length) * Math.max(0.1, bestRawFitness) * (bestMatchQuality || 1.0);
     return {
       task,
       bestGene,
@@ -167,13 +179,16 @@ export class TaskMatcher {
     // 2. Build compliant bundle (Gene + Capsule + EvolutionEvent) and publish
     const bundle = buildBundle(capsule);
     const bundleCapsuleId = bundle[1].asset_id;
+    const capsuleSource = storeEntry?.source || "hub";
+    const hubKnowsOriginal = capsuleSource === "hub";
 
     let validated = true;
     try {
       const vRes = await darwin.hub.validate(bundle);
       validated = vRes?.payload?.valid !== false && vRes?.valid !== false;
-    } catch {
+    } catch (err) {
       validated = false;
+      darwin._emit?.("error", { phase: "task-validate", taskId, error: err.message });
     }
     entry.validateOk = validated;
 
@@ -184,25 +199,56 @@ export class TaskMatcher {
     });
 
     let published = false;
+    let publishConflict = false;
     if (validated) {
       try {
         await darwin.hub.publish(bundle);
         published = true;
-      } catch { /* already published or transient error */ }
+      } catch (err) {
+        if (err.statusCode === 409) {
+          publishConflict = true;
+          published = true;
+        }
+        darwin._emit?.("error", {
+          phase: "task-publish", taskId, statusCode: err.statusCode,
+          error: err.message, conflict: publishConflict,
+        });
+      }
     }
     entry.publishOk = published;
 
     if (published) {
-      darwin._emit?.("task-published", { taskId, bundleSize: bundle.length });
+      darwin._emit?.("task-published", { taskId, bundleSize: bundle.length, conflict: publishConflict });
     }
     this.#save();
 
-    // 3. Complete — use the original assetId the Hub knows about
+    // 3. Determine which asset_id to submit for completion
+    let completeAssetId;
+    if (published) {
+      completeAssetId = bundleCapsuleId;
+    } else if (hubKnowsOriginal) {
+      completeAssetId = assetId;
+    } else {
+      // Neither publish succeeded nor does the Hub know the original Capsule — give up
+      this.#moveToHistory(assignmentId, {
+        status: "failed",
+        failedAt: new Date().toISOString(),
+        error: "publish failed and original capsule not on Hub",
+        bounty: task.bounty_amount,
+      });
+      this.#counters.failed++;
+      this.#save();
+      darwin._emit?.("error", {
+        phase: "task-no-viable-asset", taskId,
+        error: `publish failed (source=${capsuleSource}), no Hub-known asset to submit`,
+      });
+      throw new Error("No publishable asset available for task completion");
+    }
+
     let completeRes;
     try {
-      completeRes = await this.#hub.completeWork(assignmentId, assetId);
+      completeRes = await this.#hub.completeWork(assignmentId, completeAssetId);
     } catch (err) {
-      // Move to failed history so it doesn't stay stuck in activeTasks
       this.#moveToHistory(assignmentId, {
         status: "failed",
         failedAt: new Date().toISOString(),
@@ -212,8 +258,13 @@ export class TaskMatcher {
       this.#counters.failed++;
       this.#save();
 
+      darwin._emit?.("error", {
+        phase: "task-complete", taskId, assignmentId, completeAssetId,
+        error: err.message, statusCode: err.statusCode,
+      });
+
       const failTaskType = match.matchedSignals?.[0] || task.signals?.split(",")[0]?.trim() || "hub-task";
-      darwin.recordUsage?.(assetId, failTaskType, {
+      darwin.recordUsage?.(completeAssetId, failTaskType, {
         success: false,
         tokensUsed: 0,
         baselineTokens: 0,
@@ -237,23 +288,31 @@ export class TaskMatcher {
 
     darwin._emit?.("task-completed", {
       taskId,
-      assetId,
+      assetId: completeAssetId,
       title: task.title,
       contribution,
       rewardStatus,
     });
 
-    const taskType = match.matchedSignals?.[0] || task.signals?.split(",")[0]?.trim() || "hub-task";
-    const bounty = task.bounty_amount || 0;
-    const isRewarded = rewardStatus !== "rejected" && rewardStatus !== "failed";
-    const contribFraction = typeof contribution === "number" ? Math.max(0, Math.min(1, contribution)) : 0.5;
-    darwin.recordUsage?.(assetId, taskType, {
-      success: isRewarded,
-      tokensUsed: Math.round(bounty * (1 - contribFraction)),
-      baselineTokens: bounty,
+    darwin.creditLedger?.recordEarning({
+      taskId,
+      bounty: task.bounty_amount || 0,
+      contribution,
+      rewardStatus,
     });
 
-    return { taskId, assignmentId, assetId, claimRes, completeRes };
+    const taskType = match.matchedSignals?.[0] || task.signals?.split(",")[0]?.trim() || "hub-task";
+    const isRewarded = rewardStatus !== "rejected" && rewardStatus !== "failed";
+    const contribFraction = typeof contribution === "number" ? Math.max(0, Math.min(1, contribution)) : 0.5;
+    darwin.recordUsage?.(completeAssetId, taskType, {
+      success: isRewarded,
+      tokensUsed: 0,
+      baselineTokens: 0,
+      contribution: contribFraction,
+      bounty: task.bounty_amount || 0,
+    });
+
+    return { taskId, assignmentId, assetId: completeAssetId, claimRes, completeRes };
   }
 
   #moveToHistory(assignmentId, fields) {
@@ -267,16 +326,127 @@ export class TaskMatcher {
     }
   }
 
+  /**
+   * Sync local active claims with Hub /a2a/work/my and drop stale rows so
+   * maxConcurrent slots are not blocked forever (e.g. crash mid-flow).
+   * Controlled by DARWIN_STALE_CLAIM_MS (default 48h).
+   */
+  async #reconcileActiveWithHub(darwin) {
+    if (!this.#hub?.nodeId) return;
+    const snapshot = [...this.#activeTasks];
+    if (snapshot.length === 0) return;
+
+    let items = [];
+    try {
+      const res = await this.#hub.getMyWork();
+      items = res?.assignments ?? res?.payload?.assignments ?? (Array.isArray(res) ? res : []);
+    } catch {
+      return;
+    }
+
+    const byAssignment = new Map();
+    for (const w of items) {
+      const aid = w.assignment_id || w.id || w.assignment?.id;
+      if (aid) byAssignment.set(aid, w);
+    }
+
+    const staleMs = Number(process.env.DARWIN_STALE_CLAIM_MS);
+    const maxStaleMs = Number.isFinite(staleMs) && staleMs > 0 ? staleMs : DEFAULT_STALE_CLAIM_MS;
+    const now = Date.now();
+
+    for (const t of snapshot) {
+      if (!this.#activeTasks.some((a) => a.assignmentId === t.assignmentId)) continue;
+      if (t.status !== "claimed") continue;
+
+      const ageMs = now - new Date(t.claimedAt).getTime();
+      const hub = byAssignment.get(t.assignmentId);
+      const hubStatus = String(hub?.status ?? "").toLowerCase();
+
+      if (hub && HUB_TERMINAL_STATUSES.has(hubStatus)) {
+        const done = hubStatus === "completed" || hubStatus === "complete" || hubStatus === "done";
+        this.#moveToHistory(t.assignmentId, {
+          status: done ? "completed" : "failed",
+          reconciledAt: new Date().toISOString(),
+          error: `hub-reconciled:${hubStatus || "unknown"}`,
+          bounty: hub?.bounty ?? hub?.bounty_amount ?? t.bounty ?? null,
+        });
+        if (done) this.#counters.completed++;
+        else this.#counters.failed++;
+        this.#save();
+        darwin._emit?.("task-reconciled", {
+          assignmentId: t.assignmentId,
+          taskId: t.taskId,
+          hubStatus,
+          outcome: done ? "completed" : "failed",
+        });
+        continue;
+      }
+
+      if (!hub && ageMs > HUB_ABSENT_GRACE_MS) {
+        this.#moveToHistory(t.assignmentId, {
+          status: "abandoned",
+          abandonedAt: new Date().toISOString(),
+          error: "assignment missing from Hub getMyWork (expired or released)",
+        });
+        this.#counters.failed++;
+        this.#save();
+        darwin._emit?.("task-abandoned", {
+          assignmentId: t.assignmentId,
+          taskId: t.taskId,
+          reason: "not-on-hub",
+        });
+        continue;
+      }
+
+      if (hub && ageMs > maxStaleMs) {
+        this.#moveToHistory(t.assignmentId, {
+          status: "abandoned",
+          abandonedAt: new Date().toISOString(),
+          error: `stale claim (${Math.round(ageMs / 3600000)}h) — local slot freed; verify Hub assignment if needed`,
+        });
+        this.#counters.failed++;
+        this.#save();
+        darwin._emit?.("task-abandoned", {
+          assignmentId: t.assignmentId,
+          taskId: t.taskId,
+          reason: "stale-timeout",
+          hubStatus: hubStatus || "active",
+        });
+      }
+    }
+  }
+
   // ── Cycle (called by Darwin heartbeat loop) ─────────────────────────────
 
   async cycle(darwin) {
+    await this.#reconcileActiveWithHub(darwin);
+
     const tasks = darwin.getBufferedTasks?.() || darwin.lastHeartbeat?.raw?.available_tasks || [];
     if (tasks.length === 0) return;
 
     // Scan
-    const candidates = this.scan(tasks, darwin.store);
-    this.#lastScanResults = candidates;
+    let candidates = this.scan(tasks, darwin.store);
     this.#counters.scanned += tasks.length;
+
+    // Fallback: create template capsules for unmatched tasks
+    if (candidates.length === 0 && this.#autoSubmit && this.#enabled) {
+      const touched = new Set([
+        ...this.#activeTasks.map((t) => t.taskId),
+        ...this.#completedHistory.map((t) => t.taskId),
+      ]);
+      const untouched = tasks.filter((t) => !touched.has(t.task_id));
+      if (untouched.length > 0) {
+        const target = untouched[0];
+        try {
+          const capsule = CapsuleFactory.createForTask(target);
+          darwin.store.add(capsule, 0.3, "template");
+          darwin._emit?.("template-capsule", { taskId: target.task_id, assetId: capsule.asset_id });
+          candidates = this.scan(tasks, darwin.store);
+        } catch { /* template creation failed, proceed without */ }
+      }
+    }
+
+    this.#lastScanResults = candidates;
     this.#counters.matched += candidates.length;
 
     if (candidates.length > 0) {
@@ -334,6 +504,12 @@ export class TaskMatcher {
 
   /** Re-read worker-state.json (useful when external tools modify the file). */
   reload() { this.#load(); }
+
+  /** Hub sync + stale-claim cleanup (also runs automatically at each cycle()). */
+  async reconcileAssignments(darwin) {
+    await this.#reconcileActiveWithHub(darwin);
+    this.#save();
+  }
 
   // ── Persistence ────────────────────────────────────────────────────────
 
