@@ -384,10 +384,15 @@ export class Darwin {
     if (samples >= 5 && fitness !== null && this.#tracker.canReport(capsuleId)) {
       const records = this.#tracker.getRecords(capsuleId);
       const successCount = records.filter((r) => r.success).length;
+      const contribs = records.map((r) => r.contribution).filter((c) => typeof c === "number");
+      const avgContribution = contribs.length > 0
+        ? Math.round((contribs.reduce((a, b) => a + b, 0) / contribs.length) * 1000) / 1000
+        : 0;
       this.#hub.report(capsuleId, {
         fitness,
         samples,
         success_rate: Math.round((successCount / records.length) * 1000) / 1000,
+        contribution: avgContribution,
         token_savings: entry.baseline_tokens > 0
           ? Math.round((1 - entry.tokens_used / entry.baseline_tokens) * 1000) / 1000
           : 0,

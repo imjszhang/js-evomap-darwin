@@ -44,11 +44,11 @@ export class Mutator {
   evaluateVariant(originalFitness, variantResults) {
     if (!variantResults || variantResults.length < 3) return false;
     const successRate = variantResults.filter((r) => r.success).length / variantResults.length;
-    const avgTokens = variantResults.reduce((s, r) => s + (r.tokensUsed || 0), 0) / variantResults.length;
-    const avgBaseline = variantResults.reduce((s, r) => s + (r.baselineTokens || 0), 0) / variantResults.length;
-
-    const tokenSavings = avgBaseline > 0 ? Math.max(0, 1 - avgTokens / avgBaseline) : 0;
-    const variantFitness = successRate * tokenSavings;
+    const contribs = variantResults.map((r) => r.contribution).filter((c) => typeof c === "number");
+    const avgContrib = contribs.length > 0
+      ? contribs.reduce((s, c) => s + Math.max(0, Math.min(1, c)), 0) / contribs.length
+      : 1;
+    const variantFitness = successRate * avgContrib;
 
     return variantFitness > (originalFitness ?? 0);
   }
