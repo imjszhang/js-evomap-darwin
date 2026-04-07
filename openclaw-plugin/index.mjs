@@ -3,7 +3,9 @@ import nodeFs from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
 import { buildEarningsApiPayload } from "../src/earnings-api.js";
+import { computeAssetId } from "../src/utils/hash.js";
 
 const __dirname = nodePath.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = nodePath.resolve(__dirname, "..");
@@ -123,6 +125,7 @@ async function saveHeartbeatState(dataDir, heartbeatResult, nodeId) {
 }
 
 let darwinInstance = null;
+let pluginRuntime = null;
 
 const EVENT_BUFFER_MAX = 100;
 const eventBuffer = [];
@@ -315,6 +318,121 @@ function broadcastDarwinGenes(darwin) {
   })));
 }
 
+const AGENT_GENERATE_TIMEOUT_MS = 90_000;
+
+function buildCapsulePrompt(task) {
+  const title = (task.title || "").slice(0, 200);
+  const signals = (task.signals || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const bounty = task.bounty_amount ?? "unknown";
+
+  return `You are an EvoMap protocol expert. Generate a high-quality Capsule asset for the following task.
+
+Task title: ${title}
+Task signals: ${signals.join(", ")}
+Bounty: ${bounty}
+
+Requirements:
+1. The Capsule must contain a genuine, substantive solution — not generic placeholder text.
+2. The "content" field must be a detailed, actionable approach to the task (at least 200 characters).
+3. The "strategy" field must be an array of 3-7 concrete step descriptions.
+4. The "trigger" field must contain normalized, lowercase, deduplicated signal keywords.
+5. Follow the EvoMap Capsule schema exactly.
+
+Return ONLY a JSON code block with the Capsule object. No other text before or after.
+
+\`\`\`json
+{
+  "type": "Capsule",
+  "schema_version": "1.5.0",
+  "trigger": ["signal1", "signal2"],
+  "summary": "Concise summary of the solution approach",
+  "content": "Detailed multi-paragraph solution text...",
+  "strategy": [
+    "Step 1: ...",
+    "Step 2: ...",
+    "Step 3: ..."
+  ],
+  "confidence": 0.75,
+  "blast_radius": { "files": 1, "lines": 30 },
+  "outcome": { "status": "success", "score": 0.75 },
+  "env_fingerprint": { "platform": "any", "arch": "any" }
+}
+\`\`\`
+
+Generate the Capsule now for the task above. The content must directly address "${title}".`;
+}
+
+function parseCapsuleFromReply(text) {
+  const jsonMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  const raw = jsonMatch ? jsonMatch[1].trim() : text.trim();
+  try {
+    const obj = JSON.parse(raw);
+    if (obj.type !== "Capsule" || !obj.trigger || !obj.content) return null;
+    if (!Array.isArray(obj.trigger)) obj.trigger = [String(obj.trigger)];
+    obj.trigger = [...new Set(obj.trigger.map((s) => s.trim().toLowerCase()).filter(Boolean))];
+    if (!obj.schema_version) obj.schema_version = "1.5.0";
+    if (!obj.summary) obj.summary = obj.content.slice(0, 120);
+    if (!Array.isArray(obj.strategy) || obj.strategy.length < 2) {
+      obj.strategy = [
+        "Decompose problem into measurable sub-objectives with validation checkpoints",
+        "Apply A/B comparison against baseline to verify genuine improvement",
+      ];
+    }
+    if (typeof obj.confidence !== "number") obj.confidence = 0.72;
+    if (!obj.blast_radius) obj.blast_radius = { files: 1, lines: 20 };
+    if (!obj.outcome) obj.outcome = { status: "success", score: obj.confidence };
+    if (!obj.env_fingerprint) obj.env_fingerprint = { platform: "any", arch: "any" };
+    delete obj.asset_id;
+    obj.asset_id = computeAssetId(obj);
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
+async function generateCapsuleViaAgent(task, context) {
+  if (!pluginRuntime?.subagent) return null;
+
+  const sessionKey = `agent:main:subagent:darwin-capsule-${task.task_id?.slice(0, 16) || randomUUID().slice(0, 8)}`;
+  const prompt = buildCapsulePrompt(task);
+
+  try {
+    const { runId } = await pluginRuntime.subagent.run({
+      sessionKey,
+      message: prompt,
+      deliver: false,
+    });
+
+    const result = await pluginRuntime.subagent.waitForRun({
+      runId,
+      timeoutMs: AGENT_GENERATE_TIMEOUT_MS,
+    });
+
+    if (result?.status === "error" || result?.status === "timeout") return null;
+
+    const { messages } = await pluginRuntime.subagent.getSessionMessages({
+      sessionKey,
+      limit: 5,
+    });
+
+    let capsule = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      const text = msg?.content ?? msg?.text ?? (typeof msg === "string" ? msg : "");
+      if (!text) continue;
+      capsule = parseCapsuleFromReply(text);
+      if (capsule) break;
+    }
+
+    try { await pluginRuntime.subagent.deleteSession({ sessionKey }); } catch { /* best-effort */ }
+
+    return capsule;
+  } catch {
+    try { await pluginRuntime.subagent.deleteSession({ sessionKey }); } catch { /* best-effort */ }
+    return null;
+  }
+}
+
 async function getDarwin(pluginCfg) {
   if (darwinInstance) return darwinInstance;
 
@@ -407,6 +525,16 @@ async function getDarwin(pluginCfg) {
     pushEvent("task-failed", `Task ${data.taskId} failed: ${data.error}`);
     if (darwinInstance.worker) broadcastSSE("worker", darwinInstance.worker.getStats());
   });
+  darwinInstance.on("agent-generate-start", (data) => {
+    pushEvent("agent-generate-start", `Agent generating capsule for "${data.title || data.taskId}"`);
+  });
+  darwinInstance.on("agent-capsule", (data) => {
+    pushEvent("agent-capsule", `Agent capsule created for task ${data.taskId?.slice(0, 16)} → ${data.assetId?.slice(0, 24)}`);
+    broadcastDarwinGenes(darwinInstance);
+  });
+  darwinInstance.on("agent-capsule-rejected", (data) => {
+    pushEvent("agent-capsule-rejected", `Agent capsule rejected for task ${data.taskId?.slice(0, 16)}: ${data.reason}`);
+  });
   darwinInstance.on("bootstrap", (data) => {
     pushEvent("bootstrap", `Bootstrap evaluated ${data.evaluated} capsule(s), avg score: ${data.avgScore}`);
     broadcastDarwinStatus(darwinInstance);
@@ -432,6 +560,12 @@ async function getDarwin(pluginCfg) {
     pushEvent("evolve-think", "Agent-driven evolution cycle — darwin_think available");
   });
 
+  if (pluginRuntime?.subagent && darwinInstance.worker) {
+    darwinInstance.worker.setGenerateCallback(async (task, context) => {
+      return await generateCapsuleViaAgent(task, context);
+    });
+  }
+
   if (darwinInstance.hub.nodeId && darwinInstance.worker) {
     darwinInstance.worker.register({ enabled: true }).catch(() => {});
   }
@@ -444,6 +578,7 @@ async function getDarwin(pluginCfg) {
 
 export default function register(api) {
   const pluginCfg = api.pluginConfig ?? {};
+  pluginRuntime = api.runtime ?? null;
 
   // Initialize persistent event log directory
   eventLogDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");

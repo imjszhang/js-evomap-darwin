@@ -1,12 +1,12 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { buildBundle } from "./bundle-builder.js";
-import { CapsuleFactory } from "./capsule-factory.js";
 
 const DEFAULT_MIN_MATCH_SCORE = 0.3;
 const DEFAULT_MAX_CONCURRENT = 3;
 const COMPLETED_HISTORY_MAX = 50;
 const DEFAULT_STALE_CLAIM_MS = 48 * 3600 * 1000;
+const DEFAULT_MAX_TASK_FAILURES = 2;
 const HUB_ABSENT_GRACE_MS = 3600 * 1000;
 const HUB_TERMINAL_STATUSES = new Set([
   "completed", "complete", "done", "failed", "fail", "cancelled", "canceled",
@@ -25,6 +25,8 @@ export class TaskMatcher {
   #minMatchScore;
   #maxConcurrent;
   #statePath;
+
+  #generateCallback = null;
 
   #registered = false;
   #enabled = false;
@@ -49,6 +51,27 @@ export class TaskMatcher {
   get enabled() { return this.#enabled; }
   get autoSubmit() { return this.#autoSubmit; }
   set autoSubmit(v) { this.#autoSubmit = !!v; }
+
+  setGenerateCallback(fn) {
+    this.#generateCallback = typeof fn === "function" ? fn : null;
+  }
+
+  #isTaskCoolingDown(taskId) {
+    let failures = 0;
+    for (const t of this.#completedHistory) {
+      if (t.taskId === taskId && t.status === "failed") failures++;
+    }
+    return failures >= DEFAULT_MAX_TASK_FAILURES;
+  }
+
+  async #preValidate(bundle, darwin) {
+    try {
+      const vRes = await darwin.hub.validate(bundle);
+      return vRes?.payload?.valid !== false && vRes?.valid !== false;
+    } catch {
+      return false;
+    }
+  }
 
   // ── Task Matching ──────────────────────────────────────────────────────
 
@@ -138,16 +161,30 @@ export class TaskMatcher {
     const capsule = bestGene.capsule;
     const assetId = capsule.asset_id;
 
+    const storeEntry = darwin.store?.has(assetId)
+      ? darwin.store.ranked(darwin.store.capacity).find((g) => g.assetId === assetId)
+      : null;
+    const capsuleSource = storeEntry?.source || "hub";
+
+    // 0. Pre-validate for non-hub capsules (avoid wasting claim slots)
+    if (capsuleSource !== "hub") {
+      const preBundle = buildBundle(capsule);
+      const preValid = await this.#preValidate(preBundle, darwin);
+      if (!preValid) {
+        darwin._emit?.("error", {
+          phase: "task-pre-validate", taskId,
+          error: `pre-validate failed for ${capsuleSource} capsule, skipping claim`,
+        });
+        throw new Error(`Pre-validate failed for ${capsuleSource} capsule`);
+      }
+    }
+
     // 1. Claim
     const claimRes = await this.#hub.claimWork(taskId);
     const assignmentId =
       claimRes.assignment_id ||
       claimRes.id ||
       claimRes.assignment?.id;
-
-    const storeEntry = darwin.store?.has(assetId)
-      ? darwin.store.ranked(darwin.store.capacity).find((g) => g.assetId === assetId)
-      : null;
 
     const entry = {
       taskId,
@@ -159,7 +196,7 @@ export class TaskMatcher {
       matchScore: match.matchScore,
       matchedSignals: match.matchedSignals,
       capsuleSummary: capsule.summary || null,
-      capsuleSource: storeEntry?.source || "hub",
+      capsuleSource,
       validateOk: null,
       publishOk: null,
       hubContribution: null,
@@ -179,7 +216,6 @@ export class TaskMatcher {
     // 2. Build compliant bundle (Gene + Capsule + EvolutionEvent) and publish
     const bundle = buildBundle(capsule);
     const bundleCapsuleId = bundle[1].asset_id;
-    const capsuleSource = storeEntry?.source || "hub";
     const hubKnowsOriginal = capsuleSource === "hub";
 
     let validated = true;
@@ -430,24 +466,35 @@ export class TaskMatcher {
     let candidates = this.scan(tasks, darwin.store);
     this.#counters.scanned += tasks.length;
 
-    // Fallback: create template capsules for unmatched tasks (up to 3)
-    if (candidates.length === 0 && this.#autoSubmit && this.#enabled) {
+    // Fallback: use agent callback to generate capsules for unmatched tasks
+    if (candidates.length === 0 && this.#autoSubmit && this.#enabled && this.#generateCallback) {
       const touched = new Set([
         ...this.#activeTasks.map((t) => t.taskId),
         ...this.#completedHistory.map((t) => t.taskId),
       ]);
       const untouched = tasks.filter((t) => !touched.has(t.task_id));
-      const toTemplate = untouched.slice(0, 3);
-      for (const target of toTemplate) {
+      for (const target of untouched.slice(0, 1)) {
+        if (this.#isTaskCoolingDown(target.task_id)) continue;
         try {
-          const capsule = CapsuleFactory.createForTask(target);
-          darwin.store.add(capsule, 0.3, "template");
-          darwin._emit?.("template-capsule", { taskId: target.task_id, assetId: capsule.asset_id });
-        } catch { /* template creation failed, proceed without */ }
+          darwin._emit?.("agent-generate-start", { taskId: target.task_id, title: target.title });
+          const capsule = await this.#generateCallback(target, {
+            store: darwin.store,
+            hub: darwin.hub,
+          });
+          if (!capsule) continue;
+          const bundle = buildBundle(capsule);
+          const valid = await this.#preValidate(bundle, darwin);
+          if (valid) {
+            darwin.store.add(capsule, 0.5, "agent");
+            darwin._emit?.("agent-capsule", { taskId: target.task_id, assetId: capsule.asset_id });
+          } else {
+            darwin._emit?.("agent-capsule-rejected", { taskId: target.task_id, reason: "pre-validate failed" });
+          }
+        } catch (err) {
+          darwin._emit?.("error", { phase: "agent-generate", taskId: target.task_id, error: err.message });
+        }
       }
-      if (toTemplate.length > 0) {
-        candidates = this.scan(tasks, darwin.store);
-      }
+      candidates = this.scan(tasks, darwin.store);
     }
 
     this.#lastScanResults = candidates;
