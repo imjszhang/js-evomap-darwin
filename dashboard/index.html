@@ -679,6 +679,91 @@
   .tag.revolution { background: var(--accent); color: var(--bg); }
   .tag.evolving { background: var(--accent3); color: var(--bg); }
   .tag.dependent { background: var(--accent2); color: var(--bg); }
+  .sysmon-grid {
+    display: flex;
+    gap: 20px;
+    min-height: 0;
+  }
+  .sysmon-left {
+    flex: 0 0 340px;
+    min-width: 0;
+  }
+  .sysmon-right {
+    flex: 1;
+    min-width: 0;
+    max-height: 380px;
+    overflow-y: auto;
+  }
+  .sysmon-section-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--dim);
+    margin: 10px 0 6px;
+  }
+  .sysmon-section-title:first-child { margin-top: 0; }
+  .health-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .health-row:last-child { border-bottom: none; }
+  .health-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .health-dot.ok { background: var(--accent); }
+  .health-dot.warn { background: var(--accent2); }
+  .health-dot.fail { background: var(--danger); }
+  .health-dot.unknown { background: var(--dim); }
+  .health-label { flex: 1; color: var(--dim); }
+  .health-value { font-weight: 600; text-align: right; min-width: 80px; }
+  .health-value.ok { color: var(--accent); }
+  .health-value.warn { color: var(--accent2); }
+  .health-value.fail { color: var(--danger); }
+  .evtlog-row {
+    display: flex;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .evtlog-row:last-child { border-bottom: none; }
+  .evtlog-time {
+    flex-shrink: 0;
+    min-width: 44px;
+    color: var(--dim);
+    font-size: 10px;
+  }
+  .evtlog-type {
+    flex-shrink: 0;
+    min-width: 80px;
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .evtlog-type.error { color: var(--danger); }
+  .evtlog-type.heartbeat, .evtlog-type.service-start { color: var(--accent); }
+  .evtlog-type.evolve { color: var(--accent3); }
+  .evtlog-type.fetch { color: var(--accent3); }
+  .evtlog-type.record { color: var(--accent4); }
+  .evtlog-type.plugin-init { color: var(--accent); }
+  .evtlog-type.service-stop { color: var(--accent2); }
+  .evtlog-type.task-completed { color: var(--accent); }
+  .evtlog-type.task-failed { color: var(--danger); }
+  .evtlog-msg {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   @media (max-width: 720px) {
     .grid {
@@ -696,6 +781,12 @@
       flex-direction: row;
       align-items: center;
       gap: 12px;
+    }
+    .sysmon-grid {
+      flex-direction: column;
+    }
+    .sysmon-left {
+      flex: none;
     }
   }
 </style>
@@ -746,6 +837,7 @@
         </div>
         <div class="hb-countdown"><div class="hb-countdown-fill" id="hbCountdownBar" style="width:0%"></div></div>
         <div class="stat-row" style="margin-top:4px"><span class="stat-label">Available Tasks</span><span class="stat-value" id="hbTaskCount">0</span></div>
+        <div class="stat-row" style="margin-top:4px"><span class="stat-label">Earnings</span><span class="stat-value" id="hbEarnings">—</span></div>
         <div style="margin-top:8px">
           <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:4px">Credit History</div>
           <canvas id="creditChart" style="max-height:80px"></canvas>
@@ -872,6 +964,8 @@
         <div class="stat-row"><span class="stat-label">Matched</span><span class="stat-value" id="workerMatched">0</span></div>
         <div class="stat-row"><span class="stat-label">Claimed</span><span class="stat-value" id="workerClaimed">0</span></div>
         <div class="stat-row"><span class="stat-label">Completed</span><span class="stat-value good" id="workerCompleted">0</span></div>
+        <div class="stat-row"><span class="stat-label">Avg Contribution</span><span class="stat-value" id="workerAvgContrib">—</span></div>
+        <div class="stat-row"><span class="stat-label">Reward Rate</span><span class="stat-value" id="workerRewardRate">—</span></div>
         <div class="stat-row"><span class="stat-label">Failed</span><span class="stat-value" id="workerFailed">0</span></div>
         <div style="margin-top:10px">
           <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:4px">Recent Matches</div>
@@ -888,6 +982,66 @@
         <div id="activeTasks"><div style="color:var(--dim)">No active tasks</div></div>
         <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:var(--dim); margin-bottom:6px; margin-top:12px">Completed (recent)</div>
         <div id="completedTasks" style="max-height:260px; overflow-y:auto"><div style="color:var(--dim)">No completed tasks</div></div>
+      </div>
+    </div>
+
+    <!-- System Monitor -->
+    <div class="panel span-2">
+      <h2>System Monitor</h2>
+      <div class="sysmon-grid" id="sysMonitorPanel">
+        <div class="sysmon-left">
+          <div class="sysmon-section-title">Service Status</div>
+          <div class="health-row">
+            <span class="health-dot unknown" id="sysHbDot"></span>
+            <span class="health-label">Heartbeat Service</span>
+            <span class="health-value" id="sysHbStatus">—</span>
+          </div>
+          <div class="health-row">
+            <span class="health-dot unknown" id="sysEvolveDot"></span>
+            <span class="health-label">Last Evolution</span>
+            <span class="health-value" id="sysEvolveStatus">—</span>
+          </div>
+          <div class="health-row">
+            <span class="health-dot unknown" id="sysUptimeDot"></span>
+            <span class="health-label">Uptime</span>
+            <span class="health-value" id="sysUptime">—</span>
+          </div>
+          <div class="health-row">
+            <span class="health-label" style="padding-left:16px">Events Today</span>
+            <span class="health-value" id="sysEventCount">0</span>
+          </div>
+
+          <div class="sysmon-section-title">Health Checks</div>
+          <div class="health-row">
+            <span class="health-dot unknown" id="chkHbDot"></span>
+            <span class="health-label">Heartbeat Freshness</span>
+            <span class="health-value" id="chkHbVal">—</span>
+          </div>
+          <div class="health-row">
+            <span class="health-dot unknown" id="chkEvolveDot"></span>
+            <span class="health-label">Evolution Freshness</span>
+            <span class="health-value" id="chkEvolveVal">—</span>
+          </div>
+          <div class="health-row">
+            <span class="health-dot unknown" id="chkFitDot"></span>
+            <span class="health-label">Fitness Data Fresh</span>
+            <span class="health-value" id="chkFitVal">—</span>
+          </div>
+          <div class="health-row">
+            <span class="health-dot unknown" id="chkGeneDot"></span>
+            <span class="health-label">Gene Pool Fill</span>
+            <span class="health-value" id="chkGeneVal">—</span>
+          </div>
+          <div class="health-row">
+            <span class="health-dot unknown" id="chkPeerDot"></span>
+            <span class="health-label">P2P Connections</span>
+            <span class="health-value" id="chkPeerVal">—</span>
+          </div>
+        </div>
+        <div class="sysmon-right">
+          <div class="sysmon-section-title">Event Log (persistent)</div>
+          <div id="sysEventLog"><div style="color:var(--dim)">Loading...</div></div>
+        </div>
       </div>
     </div>
 
@@ -1137,8 +1291,10 @@ function connectSSE() {
         }
       }
       sseInitApplied = true;
+      startHealthPolling();
     } catch {
       sseInitApplied = true;
+      startHealthPolling();
       pollAPI({ sseSidecar: true });
     }
   });
@@ -1238,6 +1394,7 @@ async function pollAPI(opts = {}) {
 function connectREST() {
   pollAPI();
   pollTimer = setInterval(pollAPI, POLL_INTERVAL_MS);
+  startHealthPolling();
 }
 
 function handleMessage(msg) {
@@ -1413,6 +1570,7 @@ function addEvent(evt) {
   </div>`;
   el.insertAdjacentHTML('afterbegin', html);
   while (el.children.length > 100) el.lastChild.remove();
+  prependSysEvent(evt);
 }
 
 // ── Heartbeat ────────────────────────────────────────────────────────────
@@ -1634,6 +1792,22 @@ function updateWorker(data) {
   document.getElementById('workerCompleted').textContent = c.completed ?? 0;
   document.getElementById('workerFailed').textContent = c.failed ?? 0;
 
+  const hist = data.completedHistory || [];
+  if (hist.length > 0) {
+    const contribs = hist.map(h => h.hubContribution).filter(v => v != null && v > 0);
+    const avgC = contribs.length > 0 ? contribs.reduce((a, b) => a + b, 0) / contribs.length : 0;
+    document.getElementById('workerAvgContrib').textContent = avgC > 0 ? avgC.toFixed(3) : '—';
+
+    const rewarded = hist.filter(h => h.hubRewardStatus === 'rewarded' || h.hubRewardStatus === 'accepted').length;
+    const rate = hist.length > 0 ? rewarded / hist.length : 0;
+    const rateEl = document.getElementById('workerRewardRate');
+    rateEl.textContent = `${(rate * 100).toFixed(0)}% (${rewarded}/${hist.length})`;
+    rateEl.className = 'stat-value' + (rate >= 0.5 ? ' good' : rate > 0 ? '' : '');
+  } else {
+    document.getElementById('workerAvgContrib').textContent = '—';
+    document.getElementById('workerRewardRate').textContent = '—';
+  }
+
   const matchEl = document.getElementById('workerMatches');
   const results = data.lastScanResults || [];
   if (results.length === 0) {
@@ -1791,6 +1965,166 @@ function updateMyTasks(data) {
   } else {
     compEl.innerHTML = completed.slice().reverse().map(renderTaskCard).join('');
   }
+}
+
+// ── System Monitor ──────────────────────────────────────────────────────
+let sysHealthTimer = null;
+
+function formatAge(ms) {
+  if (ms === null || ms === undefined) return '—';
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ${min % 60}m`;
+  const days = Math.floor(hr / 24);
+  return `${days}d ${hr % 24}h`;
+}
+
+function updateHealthPanel(h) {
+  if (!h) return;
+  // Service status
+  const hbRunning = h.heartbeatService === 'running';
+  const hbDot = document.getElementById('sysHbDot');
+  hbDot.className = `health-dot ${hbRunning ? 'ok' : 'fail'}`;
+  const hbStatusEl = document.getElementById('sysHbStatus');
+  hbStatusEl.textContent = hbRunning ? 'Running' : 'Stopped';
+  hbStatusEl.className = `health-value ${hbRunning ? 'ok' : 'fail'}`;
+
+  const evolveEl = document.getElementById('sysEvolveStatus');
+  const evolveDot = document.getElementById('sysEvolveDot');
+  if (h.lastEvolveAge !== null) {
+    evolveEl.textContent = `${formatAge(h.lastEvolveAge)} ago`;
+    const cls = h.checks.evolutionFresh;
+    evolveDot.className = `health-dot ${cls}`;
+    evolveEl.className = `health-value ${cls}`;
+  } else {
+    evolveEl.textContent = 'Never';
+    evolveDot.className = 'health-dot fail';
+    evolveEl.className = 'health-value fail';
+  }
+
+  const uptimeEl = document.getElementById('sysUptime');
+  const uptimeDot = document.getElementById('sysUptimeDot');
+  if (h.upSince) {
+    const age = Date.now() - new Date(h.upSince).getTime();
+    uptimeEl.textContent = formatAge(age);
+    uptimeDot.className = 'health-dot ok';
+    uptimeEl.className = 'health-value ok';
+  } else {
+    uptimeEl.textContent = '—';
+    uptimeDot.className = 'health-dot unknown';
+  }
+
+  document.getElementById('sysEventCount').textContent = h.eventCountToday ?? 0;
+
+  // Health checks
+  const checks = h.checks || {};
+  for (const [key, status] of Object.entries(checks)) {
+    const map = {
+      heartbeatFresh: ['chkHbDot', 'chkHbVal'],
+      evolutionFresh: ['chkEvolveDot', 'chkEvolveVal'],
+      fitnessDataFresh: ['chkFitDot', 'chkFitVal'],
+      genePoolHealthy: ['chkGeneDot', 'chkGeneVal'],
+      peerConnected: ['chkPeerDot', 'chkPeerVal'],
+    };
+    const ids = map[key];
+    if (!ids) continue;
+    const dotEl = document.getElementById(ids[0]);
+    const valEl = document.getElementById(ids[1]);
+    if (dotEl) dotEl.className = `health-dot ${status}`;
+    if (valEl) valEl.className = `health-value ${status}`;
+  }
+
+  // Value labels for checks
+  const chkHbVal = document.getElementById('chkHbVal');
+  if (h.lastHeartbeatAge !== null) chkHbVal.textContent = formatAge(h.lastHeartbeatAge);
+  else chkHbVal.textContent = 'No data';
+
+  const chkEvolveVal = document.getElementById('chkEvolveVal');
+  if (h.lastEvolveAge !== null) chkEvolveVal.textContent = formatAge(h.lastEvolveAge);
+  else chkEvolveVal.textContent = 'No data';
+
+  const chkFitVal = document.getElementById('chkFitVal');
+  if (h.lastFitnessRecordAge !== null) chkFitVal.textContent = formatAge(h.lastFitnessRecordAge);
+  else chkFitVal.textContent = 'No data';
+
+  const chkGeneVal = document.getElementById('chkGeneVal');
+  chkGeneVal.textContent = `${h.genePoolSize ?? 0}/${h.genePoolCapacity ?? 200} (${Math.round((h.genePoolFill ?? 0) * 100)}%)`;
+
+  const chkPeerVal = document.getElementById('chkPeerVal');
+  chkPeerVal.textContent = `${h.peerConnections ?? 0}`;
+}
+
+function renderEvtLogRow(evt) {
+  const ts = evt.timestamp ? evt.timestamp.slice(11, 19) : '';
+  const type = evt.type || 'event';
+  const msg = evt.message || '';
+  return `<div class="evtlog-row">
+    <span class="evtlog-time">${ts}</span>
+    <span class="evtlog-type ${type}">${type}</span>
+    <span class="evtlog-msg" title="${msg.replace(/"/g, '&quot;')}">${msg}</span>
+  </div>`;
+}
+
+function updateSysEventLog(events) {
+  const el = document.getElementById('sysEventLog');
+  if (!events || events.length === 0) {
+    el.innerHTML = '<div style="color:var(--dim)">No events recorded today</div>';
+    return;
+  }
+  el.innerHTML = events.slice().reverse().map(renderEvtLogRow).join('');
+}
+
+function prependSysEvent(evt) {
+  const el = document.getElementById('sysEventLog');
+  const placeholder = el.querySelector('div[style]');
+  if (placeholder && placeholder.textContent.includes('No events')) placeholder.remove();
+  if (placeholder && placeholder.textContent.includes('Loading')) placeholder.remove();
+  el.insertAdjacentHTML('afterbegin', renderEvtLogRow(evt));
+  while (el.children.length > 80) el.lastChild.remove();
+}
+
+async function pollHealth() {
+  if (!API_BASE) return;
+  try {
+    const h = await fetch(`${API_BASE}/health`).then(r => r.json());
+    updateHealthPanel(h);
+  } catch { /* health poll failed */ }
+}
+
+async function loadEventLog() {
+  if (!API_BASE) return;
+  try {
+    const data = await fetch(`${API_BASE}/events-log?limit=50`).then(r => r.json());
+    updateSysEventLog(data.events || []);
+  } catch { /* events-log load failed */ }
+}
+
+async function loadEarnings() {
+  if (!API_BASE) return;
+  try {
+    const data = await fetch(`${API_BASE}/earnings`).then(r => r.json());
+    const el = document.getElementById('hbEarnings');
+    if (data && data.total != null) {
+      el.textContent = data.total.toLocaleString();
+      el.className = 'stat-value' + (data.total > 0 ? ' good' : '');
+    } else if (data && data.earned != null) {
+      el.textContent = data.earned.toLocaleString();
+      el.className = 'stat-value' + (data.earned > 0 ? ' good' : '');
+    } else {
+      el.textContent = JSON.stringify(data);
+    }
+  } catch { /* earnings fetch failed */ }
+}
+
+function startHealthPolling() {
+  if (sysHealthTimer) return;
+  pollHealth();
+  loadEventLog();
+  loadEarnings();
+  sysHealthTimer = setInterval(() => { pollHealth(); loadEarnings(); }, 30_000);
 }
 
 if (!IS_PLUGIN_MODE) {

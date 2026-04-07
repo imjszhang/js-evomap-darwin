@@ -211,6 +211,14 @@ export class TaskMatcher {
       });
       this.#counters.failed++;
       this.#save();
+
+      const failTaskType = match.matchedSignals?.[0] || task.signals?.split(",")[0]?.trim() || "hub-task";
+      darwin.recordUsage?.(assetId, failTaskType, {
+        success: false,
+        tokensUsed: 0,
+        baselineTokens: 0,
+      });
+
       throw err;
     }
 
@@ -236,10 +244,13 @@ export class TaskMatcher {
     });
 
     const taskType = match.matchedSignals?.[0] || task.signals?.split(",")[0]?.trim() || "hub-task";
+    const bounty = task.bounty_amount || 0;
+    const isRewarded = rewardStatus !== "rejected" && rewardStatus !== "failed";
+    const contribFraction = typeof contribution === "number" ? Math.max(0, Math.min(1, contribution)) : 0.5;
     darwin.recordUsage?.(assetId, taskType, {
-      success: true,
-      tokensUsed: 0,
-      baselineTokens: task.bounty_amount || 0,
+      success: isRewarded,
+      tokensUsed: Math.round(bounty * (1 - contribFraction)),
+      baselineTokens: bounty,
     });
 
     return { taskId, assignmentId, assetId, claimRes, completeRes };
@@ -256,11 +267,10 @@ export class TaskMatcher {
     }
   }
 
-  // ── Cycle (called by Darwin evolve loop) ───────────────────────────────
+  // ── Cycle (called by Darwin heartbeat loop) ─────────────────────────────
 
   async cycle(darwin) {
-    const hb = darwin.lastHeartbeat;
-    const tasks = hb?.raw?.available_tasks || [];
+    const tasks = darwin.getBufferedTasks?.() || darwin.lastHeartbeat?.raw?.available_tasks || [];
     if (tasks.length === 0) return;
 
     // Scan
@@ -290,15 +300,8 @@ export class TaskMatcher {
           taskId: match.task.task_id,
           error: err.message,
         });
-        const failedAssetId = match.bestGene?.capsule?.asset_id;
-        const failedTaskType = match.matchedSignals?.[0] || "hub-task";
-        if (failedAssetId) {
-          darwin.recordUsage?.(failedAssetId, failedTaskType, {
-            success: false,
-            tokensUsed: 0,
-            baselineTokens: 0,
-          });
-        }
+        // recordUsage(success:false) is already called inside claimAndComplete's
+        // catch block, so we don't duplicate it here.
       }
     }
   }

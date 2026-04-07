@@ -49,6 +49,8 @@ export class Darwin {
   #running = false;
   #eventHandlers = new Map();
   #lastHeartbeatResult = null;
+  #taskBuffer = new Map(); // task_id -> { task, missedHeartbeats }
+  #taskBufferMaxAge = 3;   // evict after missing from N consecutive heartbeats
   #nextHeartbeatMs;
 
   constructor({
@@ -238,6 +240,22 @@ export class Darwin {
     const skipped = candidates.length - needed.length;
     this.#emit("fetch", { total: candidates.length, ingested, skipped, rejected });
     return { total: candidates.length, ingested, skipped, rejected };
+  }
+
+  /**
+   * Run one full evolution cycle (fetch → agent/mutator → P2P → task matching).
+   * Public entry point for plugin services and tools.
+   */
+  async evolve() {
+    await this.#doEvolveCycle();
+  }
+
+  /**
+   * Run one heartbeat cycle (Hub ping → process events → task buffer → task matching).
+   * Public entry point for plugin heartbeat services.
+   */
+  async heartbeat() {
+    return this.#doHeartbeat();
   }
 
   /**
@@ -439,6 +457,16 @@ export class Darwin {
         this.#nextHeartbeatMs = res.nextHeartbeatMs;
       }
       this.#processPendingEvents(res.pendingEvents);
+
+      // Accumulate tasks across heartbeats so none are lost between cycles
+      const freshTasks = res.raw?.available_tasks || res.availableWork || [];
+      this.#updateTaskBuffer(freshTasks);
+
+      // Task matching on every heartbeat (decoupled from 4h evolve cycle)
+      if (this.#taskMatcher && typeof this.#taskMatcher.cycle === "function") {
+        try { await this.#taskMatcher.cycle(this); } catch { /* best effort */ }
+      }
+
       this.#emit("heartbeat", res);
       return res;
     } catch (err) {
@@ -472,6 +500,66 @@ export class Darwin {
     }, this.#nextHeartbeatMs);
   }
 
+  #updateTaskBuffer(freshTasks) {
+    const freshIds = new Set();
+    for (const task of freshTasks) {
+      const id = task.task_id;
+      if (!id) continue;
+      freshIds.add(id);
+      if (this.#taskBuffer.has(id)) {
+        this.#taskBuffer.get(id).missedHeartbeats = 0;
+        this.#taskBuffer.get(id).task = task;
+      } else {
+        this.#taskBuffer.set(id, { task, missedHeartbeats: 0 });
+      }
+    }
+    for (const [id, entry] of this.#taskBuffer) {
+      if (!freshIds.has(id)) {
+        entry.missedHeartbeats++;
+        if (entry.missedHeartbeats > this.#taskBufferMaxAge) {
+          this.#taskBuffer.delete(id);
+        }
+      }
+    }
+  }
+
+  /**
+   * Return all buffered tasks accumulated across recent heartbeats.
+   */
+  getBufferedTasks() {
+    return [...this.#taskBuffer.values()].map((e) => e.task);
+  }
+
+  #reEvaluateUnscoredGenes() {
+    try {
+      const unscored = this.#store.ranked(this.#store.capacity)
+        .filter((g) => g.source === "subscription" && (g.fitness ?? 0) <= 0);
+      if (unscored.length === 0) return;
+
+      const all = this.#store.ranked(this.#store.capacity);
+      const triggerCounts = new Map();
+      for (const entry of all) {
+        const triggers = entry.capsule?.trigger || entry.capsule?.signals_match || [];
+        for (const t of triggers) triggerCounts.set(t, (triggerCounts.get(t) || 0) + 1);
+      }
+
+      const evaluator = new BootstrapEvaluator({ dataDir: this.#dataDir });
+      let reScored = 0;
+      for (const entry of unscored) {
+        const score = evaluator.scoreCapsule(entry.capsule, triggerCounts, all.length);
+        if (score > 0) {
+          this.#store.updateFitness(entry.assetId, score);
+          reScored++;
+        }
+      }
+      if (reScored > 0) {
+        this.#emit("re-evaluate", { total: unscored.length, reScored });
+      }
+    } catch {
+      // Re-evaluation is best-effort — never block the evolve cycle
+    }
+  }
+
   #getActiveSignals() {
     const signals = new Set();
     for (const r of this.#tracker.rankAll()) {
@@ -481,6 +569,15 @@ export class Darwin {
       const triggers = entry.capsule?.trigger || entry.capsule?.signals_match || [];
       for (const t of triggers) signals.add(t);
     }
+
+    // Demand-driven: include signals from available Hub tasks
+    const hb = this.#lastHeartbeatResult;
+    const tasks = hb?.raw?.available_tasks || hb?.availableWork || [];
+    for (const task of tasks) {
+      const sigs = (task.signals || "").split(",").map((s) => s.trim());
+      for (const s of sigs) if (s) signals.add(s);
+    }
+
     return [...signals];
   }
 
@@ -532,10 +629,11 @@ export class Darwin {
         await this.#peerExchange.cycle(this);
       }
 
-      // 4. Task matching (if attached)
-      if (this.#taskMatcher && typeof this.#taskMatcher.cycle === "function") {
-        await this.#taskMatcher.cycle(this);
-      }
+      // 4. Task matching is now driven by heartbeat (every 5 min) instead of here.
+      //    See #doHeartbeat() for the task matching call.
+
+      // 5. Re-evaluate unscored subscription genes with structural scoring
+      this.#reEvaluateUnscoredGenes();
 
       this.#emit("evolve", { timestamp: new Date().toISOString() });
     } catch (err) {

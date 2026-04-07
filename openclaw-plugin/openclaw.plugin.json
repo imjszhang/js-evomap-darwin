@@ -52,6 +52,21 @@
         "type": "number",
         "default": 300000,
         "description": "Heartbeat interval in milliseconds (default 5 min). Can be overridden by Hub response."
+      },
+      "evolveEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable built-in evolution cycle service (fetch + P2P + task matching)"
+      },
+      "evolveIntervalMs": {
+        "type": "number",
+        "default": 14400000,
+        "description": "Evolution cycle interval in milliseconds (default 4 hours)"
+      },
+      "workerAutoSubmit": {
+        "type": "boolean",
+        "default": true,
+        "description": "Automatically claim and complete matched tasks (set false to disable auto-earning)"
       }
     }
   },
@@ -102,6 +117,22 @@
       "label": "Heartbeat Interval (ms)",
       "placeholder": "300000",
       "help": "Milliseconds between heartbeats. Hub may override this dynamically.",
+      "advanced": true
+    },
+    "evolveEnabled": {
+      "label": "Evolution Service Enabled",
+      "help": "Enable the built-in evolution cycle (fetch + P2P + task matching).",
+      "advanced": true
+    },
+    "evolveIntervalMs": {
+      "label": "Evolution Interval (ms)",
+      "placeholder": "14400000",
+      "help": "Milliseconds between evolution cycles (default 4 hours).",
+      "advanced": true
+    },
+    "workerAutoSubmit": {
+      "label": "Worker Auto-Submit",
+      "help": "Automatically claim and complete matched tasks for credit earning. Disable to require manual approval.",
       "advanced": true
     }
   }

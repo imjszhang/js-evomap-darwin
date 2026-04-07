@@ -1,6 +1,7 @@
 import nodePath from "node:path";
 import nodeFs from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = nodePath.dirname(fileURLToPath(import.meta.url));
@@ -125,6 +126,18 @@ let darwinInstance = null;
 const EVENT_BUFFER_MAX = 100;
 const eventBuffer = [];
 let eventIdCounter = 0;
+let eventLogDir = null;
+let pluginInitTimestamp = null;
+let heartbeatServiceRunning = false;
+
+function persistEvent(evt) {
+  if (!eventLogDir) return;
+  try {
+    const dateStr = evt.timestamp.slice(0, 10);
+    const logPath = nodePath.join(eventLogDir, `darwin-events-${dateStr}.jsonl`);
+    appendFileSync(logPath, JSON.stringify(evt) + "\n");
+  } catch { /* write failure must not block main flow */ }
+}
 
 function pushEvent(type, message) {
   eventIdCounter++;
@@ -134,6 +147,7 @@ function pushEvent(type, message) {
     eventBuffer.splice(0, eventBuffer.length - EVENT_BUFFER_MAX);
   }
   broadcastSSE("event", evt);
+  persistEvent(evt);
 }
 
 // ── SSE (Server-Sent Events) infrastructure ─────────────────────────────
@@ -325,7 +339,11 @@ async function getDarwin(pluginCfg) {
   const trustPolicy = new TrustPolicy({ dataDir });
   const peerGraph = new PeerGraph({ dataDir, selfNodeId: darwinInstance.hub.nodeId });
   darwinInstance.use(new Subscription({ hub: darwinInstance.hub, dataDir, trustPolicy, peerGraph }));
-  darwinInstance.use(new TaskMatcher({ hub: darwinInstance.hub, dataDir }));
+  darwinInstance.use(new TaskMatcher({
+    hub: darwinInstance.hub,
+    dataDir,
+    autoSubmit: pluginCfg.workerAutoSubmit !== false,
+  }));
 
   // Wire GeneStore file-watch → SSE broadcast
   darwinInstance.store.onChange = () => {
@@ -412,11 +430,22 @@ async function getDarwin(pluginCfg) {
     pushEvent("evolve-think", "Agent-driven evolution cycle — darwin_think available");
   });
 
+  if (darwinInstance.hub.nodeId && darwinInstance.worker) {
+    darwinInstance.worker.register({ enabled: true }).catch(() => {});
+  }
+
+  pluginInitTimestamp = new Date().toISOString();
+  pushEvent("plugin-init", `Darwin instance created (node: ${darwinInstance.hub.nodeId || "pending"}, genes: ${darwinInstance.store.size})`);
+
   return darwinInstance;
 }
 
 export default function register(api) {
   const pluginCfg = api.pluginConfig ?? {};
+
+  // Initialize persistent event log directory
+  eventLogDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
+  try { mkdirSync(eventLogDir, { recursive: true }); } catch { /* best-effort */ }
 
   // ── Tools ─────────────────────────────────────────────────────────────
 
@@ -637,13 +666,11 @@ export default function register(api) {
           });
         }
 
-        const fetchResult = await darwin.fetchAndIngest();
+        await darwin.evolve();
         const status = darwin.getStatus();
 
         return jsonResult({
           phase: "evolve",
-          fetched: fetchResult.total,
-          ingested: fetchResult.ingested,
           genePoolSize: status.geneStore.size,
           avgFitness: status.fitness.avgFitness,
           topFitness: status.fitness.topFitness,
@@ -1647,10 +1674,12 @@ export default function register(api) {
         sendSSE(res, "error", { message: err.message });
       }
       sseClients.add(res);
+      pushEvent("sse-connect", `Dashboard connected (clients: ${sseClients.size})`);
       startSSEKeepalive();
       startSSEStatusBroadcast(pluginCfg);
       req.on("close", () => {
         sseClients.delete(res);
+        pushEvent("sse-disconnect", `Dashboard disconnected (clients: ${sseClients.size})`);
         if (sseClients.size === 0) {
           if (sseKeepaliveTimer) { clearInterval(sseKeepaliveTimer); sseKeepaliveTimer = null; }
           stopSSEStatusBroadcast();
@@ -1858,6 +1887,145 @@ export default function register(api) {
     },
   });
 
+  // ── Persistent event log endpoint ────────────────────────────────────
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/events-log`,
+    auth: "plugin",
+    async handler(req, res) {
+      try {
+        const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+        const dateStr = parsed.searchParams.get("date") || new Date().toISOString().slice(0, 10);
+        const limit = Math.min(parseInt(parsed.searchParams.get("limit") || "100", 10), 500);
+        const typeFilter = parsed.searchParams.get("type") || "";
+        const logDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
+        const logPath = nodePath.join(logDir, `darwin-events-${dateStr}.jsonl`);
+
+        let events = [];
+        try {
+          const raw = nodeFs.readFileSync(logPath, "utf-8");
+          const lines = raw.trim().split("\n").filter(Boolean);
+          for (const line of lines) {
+            try {
+              const evt = JSON.parse(line);
+              if (!typeFilter || evt.type === typeFilter) events.push(evt);
+            } catch { /* skip malformed lines */ }
+          }
+        } catch {
+          // File doesn't exist for this date — return empty
+        }
+
+        const tail = events.slice(-limit);
+        sendJson(res, 200, { date: dateStr, total: events.length, events: tail });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  // ── System health endpoint ───────────────────────────────────────────
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/health`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const now = Date.now();
+        const status = darwin.getStatus();
+        const hbState = await loadHeartbeatState(
+          pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data"),
+        );
+
+        const lastHbTs = hbState.lastHeartbeat?.timestamp;
+        const lastHeartbeatAge = lastHbTs ? now - new Date(lastHbTs).getTime() : null;
+
+        // Find last evolve event from in-memory buffer
+        let lastEvolveAge = null;
+        for (let i = eventBuffer.length - 1; i >= 0; i--) {
+          if (eventBuffer[i].type === "evolve") {
+            lastEvolveAge = now - new Date(eventBuffer[i].timestamp).getTime();
+            break;
+          }
+        }
+
+        // Find last fitness record age from fitness-log.jsonl
+        let lastFitnessRecordAge = null;
+        try {
+          const fitPath = nodePath.join(
+            pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data"),
+            "fitness-log.jsonl",
+          );
+          const fitRaw = nodeFs.readFileSync(fitPath, "utf-8");
+          const fitLines = fitRaw.trim().split("\n").filter(Boolean);
+          if (fitLines.length > 0) {
+            const last = JSON.parse(fitLines[fitLines.length - 1]);
+            if (last.timestamp) lastFitnessRecordAge = now - new Date(last.timestamp).getTime();
+          }
+        } catch { /* no fitness log yet */ }
+
+        // Count today's events from the persistent log
+        let eventCountToday = 0;
+        try {
+          const todayStr = new Date().toISOString().slice(0, 10);
+          const logDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
+          const logPath = nodePath.join(logDir, `darwin-events-${todayStr}.jsonl`);
+          const raw = nodeFs.readFileSync(logPath, "utf-8");
+          eventCountToday = raw.trim().split("\n").filter(Boolean).length;
+        } catch { /* no log for today */ }
+
+        const genePoolFill = status.geneStore
+          ? status.geneStore.size / (status.geneStore.capacity || 200)
+          : 0;
+        const peerConnections = (status.subscription?.subscriptions ?? 0)
+          + (status.subscription?.subscribers ?? 0)
+          + (status.peerCount ?? 0);
+
+        const TEN_MIN = 10 * 60 * 1000;
+        const THIRTY_MIN = 30 * 60 * 1000;
+        const EIGHT_H = 8 * 60 * 60 * 1000;
+        const TWENTY_FOUR_H = 24 * 60 * 60 * 1000;
+        const SEVEN_D = 7 * 24 * 60 * 60 * 1000;
+
+        const checks = {
+          heartbeatFresh: lastHeartbeatAge !== null && lastHeartbeatAge < TEN_MIN
+            ? "ok"
+            : lastHeartbeatAge !== null && lastHeartbeatAge < THIRTY_MIN
+              ? "warn"
+              : "fail",
+          evolutionFresh: lastEvolveAge !== null && lastEvolveAge < EIGHT_H
+            ? "ok"
+            : lastEvolveAge !== null && lastEvolveAge < TWENTY_FOUR_H
+              ? "warn"
+              : "fail",
+          fitnessDataFresh: lastFitnessRecordAge !== null && lastFitnessRecordAge < TWENTY_FOUR_H
+            ? "ok"
+            : lastFitnessRecordAge !== null && lastFitnessRecordAge < SEVEN_D
+              ? "warn"
+              : "fail",
+          genePoolHealthy: genePoolFill > 0.1 ? "ok" : genePoolFill > 0.05 ? "warn" : "fail",
+          peerConnected: peerConnections > 0 ? "ok" : "fail",
+        };
+
+        sendJson(res, 200, {
+          upSince: pluginInitTimestamp,
+          heartbeatService: heartbeatServiceRunning ? "running" : "stopped",
+          lastHeartbeatAge,
+          lastEvolveAge,
+          lastFitnessRecordAge,
+          genePoolFill: Math.round(genePoolFill * 1000) / 1000,
+          genePoolSize: status.geneStore?.size ?? 0,
+          genePoolCapacity: status.geneStore?.capacity ?? 200,
+          peerConnections,
+          eventCountToday,
+          checks,
+        });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
   api.registerHttpRoute({
     path: `${ROUTE_PREFIX}/api/worker`,
     auth: "plugin",
@@ -1865,6 +2033,21 @@ export default function register(api) {
       try {
         const darwin = await getDarwin(pluginCfg);
         sendJson(res, 200, darwin.worker?.getStats() ?? { registered: false, workerEnabled: false });
+      } catch (err) {
+        sendJson(res, 500, { error: err.message });
+      }
+      return true;
+    },
+  });
+
+  api.registerHttpRoute({
+    path: `${ROUTE_PREFIX}/api/earnings`,
+    auth: "plugin",
+    async handler(_req, res) {
+      try {
+        const darwin = await getDarwin(pluginCfg);
+        const earnings = await darwin.hub.getEarnings();
+        sendJson(res, 200, earnings ?? { total: 0 });
       } catch (err) {
         sendJson(res, 500, { error: err.message });
       }
@@ -2057,8 +2240,10 @@ export default function register(api) {
       label: "Darwin Heartbeat",
       async start(ctx) {
         _heartbeatStopped = false;
+        heartbeatServiceRunning = true;
         const baseIntervalMs = pluginCfg.heartbeatIntervalMs || 300_000;
         let nextIntervalMs = baseIntervalMs;
+        pushEvent("service-start", `Heartbeat service started (interval: ${baseIntervalMs}ms)`);
 
         const runHeartbeat = async () => {
           try {
@@ -2067,14 +2252,12 @@ export default function register(api) {
               ctx.logger.warn("Heartbeat skipped: node not registered yet. Run darwin_evolve first.");
               return;
             }
-            const result = await darwin.hub.heartbeat();
-            darwin.setLastHeartbeat(result);
+            const result = await darwin.heartbeat();
+            if (!result) return;
             await saveHeartbeatState(heartbeatDataDir, result, darwin.hub.nodeId);
             if (result.nextHeartbeatMs && result.nextHeartbeatMs > 0) {
               nextIntervalMs = result.nextHeartbeatMs;
             }
-            broadcastDarwinStatus(darwin);
-            if (darwin.worker) broadcastSSE("worker", darwin.worker.getStats());
             ctx.logger.debug(
               `Heartbeat OK | credits: ${result.creditBalance} | next: ${nextIntervalMs}ms`,
             );
@@ -2096,10 +2279,70 @@ export default function register(api) {
       },
       stop() {
         _heartbeatStopped = true;
+        heartbeatServiceRunning = false;
         if (_heartbeatTimerId) {
           clearTimeout(_heartbeatTimerId);
           _heartbeatTimerId = null;
         }
+        pushEvent("service-stop", "Heartbeat service stopped");
+      },
+    });
+  }
+
+  // ── Background Evolution Service ────────────────────────────────────
+
+  if (pluginCfg.evolveEnabled !== false) {
+    let _evolveTimerId = null;
+    let _evolveStopped = false;
+    let evolveServiceRunning = false;
+
+    api.registerService({
+      id: "darwin-evolution",
+      label: "Darwin Evolution Cycle",
+      async start(ctx) {
+        _evolveStopped = false;
+        evolveServiceRunning = true;
+        const intervalMs = pluginCfg.evolveIntervalMs || 4 * 60 * 60 * 1000;
+        const initialDelayMs = 60_000;
+        pushEvent("service-start", `Evolution service started (interval: ${Math.round(intervalMs / 60000)}min, first in ${Math.round(initialDelayMs / 1000)}s)`);
+
+        const runEvolve = async () => {
+          try {
+            const darwin = await getDarwin(pluginCfg);
+            if (!darwin.hub.nodeId) {
+              ctx.logger.warn("Evolution skipped: node not registered yet.");
+              return;
+            }
+            pushEvent("evolve-start", "Evolution cycle starting...");
+            await darwin.evolve();
+            ctx.logger.debug("Evolution cycle completed");
+          } catch (err) {
+            pushEvent("error", `Evolution cycle failed: ${err.message}`);
+            ctx.logger.error(`Evolution failed: ${err.message}`);
+          }
+        };
+
+        const scheduleNext = () => {
+          if (_evolveStopped) return;
+          _evolveTimerId = setTimeout(async () => {
+            await runEvolve();
+            scheduleNext();
+          }, intervalMs);
+        };
+
+        _evolveTimerId = setTimeout(async () => {
+          await runEvolve();
+          scheduleNext();
+        }, initialDelayMs);
+      },
+      stop() {
+        _evolveStopped = true;
+        evolveServiceRunning = false;
+        if (_evolveTimerId) {
+          clearTimeout(_evolveTimerId);
+          _evolveTimerId = null;
+        }
+        pushEvent("service-stop", "Evolution service stopped");
       },
     });
   }

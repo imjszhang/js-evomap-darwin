@@ -52,7 +52,7 @@ export class BootstrapEvaluator {
       const cap = entry.capsule;
       if (!cap) continue;
 
-      const score = this.#scoreCapsule(cap, triggerCounts, all.length);
+      const score = this.scoreCapsule(cap, triggerCounts, all.length);
       if (score > 0) {
         store.updateFitness(cap.asset_id, score);
         evaluated++;
@@ -66,7 +66,11 @@ export class BootstrapEvaluator {
     return { evaluated, avgScore };
   }
 
-  #scoreCapsule(capsule, triggerCounts, totalGenes) {
+  /**
+   * Score a single capsule's structural quality (0–0.15).
+   * Can be called externally for re-evaluation of subscription genes.
+   */
+  scoreCapsule(capsule, triggerCounts = new Map(), totalGenes = 1) {
     let score = 0;
 
     // Completeness (0–0.05): has content + strategy steps >= 3
