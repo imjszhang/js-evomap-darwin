@@ -580,6 +580,9 @@ export class Darwin {
       const freshTasks = res.raw?.available_tasks || res.availableWork || [];
       this.#updateTaskBuffer(freshTasks);
 
+      // Lightweight gap analysis refresh (data only, no template creation)
+      try { this.#lastGapAnalysis = this.#analyzeSignalCoverage(); } catch { /* best effort */ }
+
       // On-demand fetch: fill gene pool gaps for available task signals
       const credits = res.creditBalance;
       const lowCredit = typeof credits === "number" && credits < 10;
@@ -749,7 +752,7 @@ export class Darwin {
       }
       const best = matches[0];
       const fitness = this.#tracker.getFitness(best.assetId);
-      if ((fitness !== null && fitness < 0.3) || (best.matchQuality ?? 0) < 0.5) {
+      if (fitness === null || fitness < 0.3 || (best.matchQuality ?? 0) < 0.5) {
         weak.push(sig);
       } else {
         covered++;
