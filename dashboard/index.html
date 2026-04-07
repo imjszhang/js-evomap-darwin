@@ -2104,9 +2104,16 @@ async function loadEventLog() {
 
 async function loadEarnings() {
   if (!API_BASE) return;
+  const el = document.getElementById('hbEarnings');
   try {
-    const data = await fetch(`${API_BASE}/earnings`).then(r => r.json());
-    const el = document.getElementById('hbEarnings');
+    const res = await fetch(`${API_BASE}/earnings`);
+    const data = await res.json();
+    if (!res.ok || data?.error) {
+      el.textContent = 'N/A';
+      el.className = 'stat-value';
+      el.title = data?.error || `HTTP ${res.status}`;
+      return;
+    }
     if (data && data.total != null) {
       el.textContent = data.total.toLocaleString();
       el.className = 'stat-value' + (data.total > 0 ? ' good' : '');
@@ -2114,9 +2121,13 @@ async function loadEarnings() {
       el.textContent = data.earned.toLocaleString();
       el.className = 'stat-value' + (data.earned > 0 ? ' good' : '');
     } else {
-      el.textContent = JSON.stringify(data);
+      el.textContent = '0';
+      el.className = 'stat-value';
     }
-  } catch { /* earnings fetch failed */ }
+  } catch {
+    el.textContent = 'N/A';
+    el.className = 'stat-value';
+  }
 }
 
 function startHealthPolling() {

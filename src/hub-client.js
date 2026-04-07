@@ -109,9 +109,23 @@ export class HubClient {
           res.on("data", (chunk) => (data += chunk));
           res.on("end", () => {
             try {
-              resolve(JSON.parse(data));
+              const parsed = JSON.parse(data);
+              if (res.statusCode >= 400) {
+                const err = new Error(parsed.error || `HTTP ${res.statusCode}`);
+                err.statusCode = res.statusCode;
+                err.response = parsed;
+                reject(err);
+              } else {
+                resolve(parsed);
+              }
             } catch {
-              resolve(data);
+              if (res.statusCode >= 400) {
+                const err = new Error(`HTTP ${res.statusCode}`);
+                err.statusCode = res.statusCode;
+                reject(err);
+              } else {
+                resolve(data);
+              }
             }
           });
         },

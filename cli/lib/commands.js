@@ -1404,7 +1404,12 @@ async function cmdEarnings() {
       console.log(`  ${JSON.stringify(data)}`);
     }
   } catch (err) {
-    console.error(`  Failed: ${err.message}`);
+    if (err.statusCode === 401 || err.statusCode === 403) {
+      console.error("  Earnings data unavailable (authentication required by Hub).");
+      console.error("  This endpoint may require account-level access at https://evomap.ai");
+    } else {
+      console.error(`  Failed: ${err.message}`);
+    }
   }
   console.log("");
 }
