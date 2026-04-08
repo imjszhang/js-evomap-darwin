@@ -7,11 +7,45 @@ const DEFAULT_MAX_CONCURRENT = 3;
 const COMPLETED_HISTORY_MAX = 50;
 const DEFAULT_STALE_CLAIM_MS = 48 * 3600 * 1000;
 const DEFAULT_MAX_TASK_FAILURES = 2;
+/** After an agent-generate failure, wait this long before retrying the same task (default 1h). */
+const DEFAULT_AGENT_GENERATE_COOLDOWN_MS = 60 * 60 * 1000;
+/** After this many consecutive failures for one task, apply a long ban (default 24h). */
+const DEFAULT_AGENT_GENERATE_MAX_ATTEMPTS = 3;
+const DEFAULT_AGENT_GENERATE_BAN_MS = 24 * 60 * 60 * 1000;
+/** Titles longer than this skip automatic agent Capsule generation (noise / error-dump tasks). */
+const DEFAULT_AGENT_GENERATE_TITLE_MAX_LEN = 500;
 const HUB_ABSENT_GRACE_MS = 3600 * 1000;
 const HUB_TERMINAL_STATUSES = new Set([
   "completed", "complete", "done", "failed", "fail", "cancelled", "canceled",
   "expired", "rejected", "revoked",
 ]);
+
+function envMs(name, fallback) {
+  const raw = process.env[name];
+  if (raw == null || String(raw).trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+function envPositiveInt(name, fallback) {
+  const raw = process.env[name];
+  if (raw == null || String(raw).trim() === "") return fallback;
+  const n = parseInt(String(raw), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * Skip auto agent-generate for Hub tasks whose title looks like an error dump or is unwieldy.
+ * Exported for tests.
+ */
+export function shouldSkipAgentGenerateTitle(title) {
+  if (title == null || typeof title !== "string") return false;
+  const t = title.toLowerCase();
+  if (t.includes("llm error]") || t.includes("llm error")) return true;
+  const maxLen = envPositiveInt("DARWIN_AGENT_GENERATE_TITLE_MAX_LEN", DEFAULT_AGENT_GENERATE_TITLE_MAX_LEN);
+  if (title.length > maxLen) return true;
+  return false;
+}
 
 /**
  * Matches available Hub tasks against the local gene pool and optionally
@@ -25,6 +59,9 @@ export class TaskMatcher {
   #minMatchScore;
   #maxConcurrent;
   #statePath;
+  #agentGenerateStatePath;
+  /** @type {{ tasks: Record<string, { failures: number, nextEligibleAt: number }> }} */
+  #agentGenerateState = { tasks: {} };
 
   #generateCallback = null;
 
@@ -45,7 +82,9 @@ export class TaskMatcher {
 
     mkdirSync(dataDir, { recursive: true });
     this.#statePath = join(dataDir, "worker-state.json");
+    this.#agentGenerateStatePath = join(dataDir, "agent-generate-state.json");
     this.#load();
+    this.#loadAgentGenerateState();
   }
 
   get enabled() { return this.#enabled; }
@@ -62,6 +101,55 @@ export class TaskMatcher {
       if (t.taskId === taskId && t.status === "failed") failures++;
     }
     return failures >= DEFAULT_MAX_TASK_FAILURES;
+  }
+
+  #agentGenerateCooldownMs() {
+    return envMs("DARWIN_AGENT_GENERATE_COOLDOWN_MS", DEFAULT_AGENT_GENERATE_COOLDOWN_MS);
+  }
+
+  #agentGenerateMaxAttempts() {
+    return envPositiveInt("DARWIN_AGENT_GENERATE_MAX_ATTEMPTS", DEFAULT_AGENT_GENERATE_MAX_ATTEMPTS);
+  }
+
+  #agentGenerateBanMs() {
+    return envMs("DARWIN_AGENT_GENERATE_BAN_MS", DEFAULT_AGENT_GENERATE_BAN_MS);
+  }
+
+  /** @returns {boolean} */
+  #isAgentGenerateBlocked(taskId) {
+    const e = this.#agentGenerateState.tasks[taskId];
+    if (!e) return false;
+    const now = Date.now();
+    if (now < e.nextEligibleAt) return true;
+    if (e.failures >= this.#agentGenerateMaxAttempts()) {
+      delete this.#agentGenerateState.tasks[taskId];
+      this.#saveAgentGenerateState();
+    }
+    return false;
+  }
+
+  #recordAgentGenerateFailure(taskId) {
+    const now = Date.now();
+    const cooldown = this.#agentGenerateCooldownMs();
+    const max = this.#agentGenerateMaxAttempts();
+    const ban = this.#agentGenerateBanMs();
+    let e = this.#agentGenerateState.tasks[taskId];
+    if (!e) e = { failures: 0, nextEligibleAt: 0 };
+    e.failures = (e.failures || 0) + 1;
+    if (e.failures >= max) {
+      e.nextEligibleAt = now + ban;
+    } else {
+      e.nextEligibleAt = now + cooldown;
+    }
+    this.#agentGenerateState.tasks[taskId] = e;
+    this.#saveAgentGenerateState();
+  }
+
+  #clearAgentGenerateState(taskId) {
+    if (this.#agentGenerateState.tasks[taskId]) {
+      delete this.#agentGenerateState.tasks[taskId];
+      this.#saveAgentGenerateState();
+    }
   }
 
   async #preValidate(bundle, darwin) {
@@ -459,7 +547,22 @@ export class TaskMatcher {
   async cycle(darwin) {
     await this.#reconcileActiveWithHub(darwin);
 
-    const tasks = darwin.getBufferedTasks?.() || darwin.lastHeartbeat?.raw?.available_tasks || [];
+    const buffered = darwin.getBufferedTasks?.() ?? [];
+    const hb = darwin.lastHeartbeat;
+    const fallbackRaw =
+      hb?.availableWork ||
+      hb?.raw?.available_tasks ||
+      hb?.raw?.available_work ||
+      [];
+    const normalizeHubTask = (t) => {
+      if (!t || typeof t !== "object") return t;
+      const task_id = t.task_id || t.id;
+      return task_id ? { ...t, task_id } : t;
+    };
+    const tasks =
+      buffered.length > 0
+        ? buffered
+        : fallbackRaw.map(normalizeHubTask).filter((t) => t && t.task_id);
     if (tasks.length === 0) return;
 
     // Scan
@@ -473,24 +576,36 @@ export class TaskMatcher {
         ...this.#completedHistory.map((t) => t.taskId),
       ]);
       const untouched = tasks.filter((t) => !touched.has(t.task_id));
-      for (const target of untouched.slice(0, 1)) {
-        if (this.#isTaskCoolingDown(target.task_id)) continue;
+      const eligible = untouched.filter((t) => {
+        if (this.#isTaskCoolingDown(t.task_id)) return false;
+        if (this.#isAgentGenerateBlocked(t.task_id)) return false;
+        if (shouldSkipAgentGenerateTitle(t.title)) return false;
+        return true;
+      });
+      for (const target of eligible.slice(0, 1)) {
         try {
           darwin._emit?.("agent-generate-start", { taskId: target.task_id, title: target.title });
           const capsule = await this.#generateCallback(target, {
             store: darwin.store,
             hub: darwin.hub,
           });
-          if (!capsule) continue;
+          if (!capsule) {
+            this.#recordAgentGenerateFailure(target.task_id);
+            darwin._emit?.("agent-generate-failed", { taskId: target.task_id, reason: "null-capsule" });
+            continue;
+          }
           const bundle = buildBundle(capsule);
           const valid = await this.#preValidate(bundle, darwin);
           if (valid) {
+            this.#clearAgentGenerateState(target.task_id);
             darwin.store.add(capsule, 0.5, "agent");
             darwin._emit?.("agent-capsule", { taskId: target.task_id, assetId: capsule.asset_id });
           } else {
+            this.#recordAgentGenerateFailure(target.task_id);
             darwin._emit?.("agent-capsule-rejected", { taskId: target.task_id, reason: "pre-validate failed" });
           }
         } catch (err) {
+          this.#recordAgentGenerateFailure(target.task_id);
           darwin._emit?.("error", { phase: "agent-generate", taskId: target.task_id, error: err.message });
         }
       }
@@ -575,6 +690,34 @@ export class TaskMatcher {
       this.#completedHistory = raw.completedHistory ?? [];
       this.#counters = { ...this.#counters, ...(raw.counters ?? {}) };
     } catch { /* start fresh */ }
+  }
+
+  #loadAgentGenerateState() {
+    if (!existsSync(this.#agentGenerateStatePath)) return;
+    try {
+      const raw = JSON.parse(readFileSync(this.#agentGenerateStatePath, "utf-8"));
+      const tasks = raw.tasks && typeof raw.tasks === "object" ? raw.tasks : {};
+      const cleaned = {};
+      const now = Date.now();
+      for (const [taskId, row] of Object.entries(tasks)) {
+        if (!row || typeof row.nextEligibleAt !== "number") continue;
+        if (row.failures >= this.#agentGenerateMaxAttempts() && now >= row.nextEligibleAt) continue;
+        cleaned[taskId] = {
+          failures: Number(row.failures) || 0,
+          nextEligibleAt: row.nextEligibleAt,
+        };
+      }
+      this.#agentGenerateState = { tasks: cleaned };
+    } catch {
+      this.#agentGenerateState = { tasks: {} };
+    }
+  }
+
+  #saveAgentGenerateState() {
+    writeFileSync(this.#agentGenerateStatePath, JSON.stringify({
+      version: 1,
+      tasks: this.#agentGenerateState.tasks,
+    }, null, 2));
   }
 
   #save() {

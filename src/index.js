@@ -58,6 +58,19 @@ function resolveEnvHubAssetFetchEnabled() {
 }
 
 /**
+ * Credits below this value skip Hub Capsule fetch (heartbeat gap fetch + evolve fetch).
+ * Default 10. Set DARWIN_LOW_CREDIT_THRESHOLD (non-negative number).
+ */
+function resolveLowCreditThreshold() {
+  const e = process.env.DARWIN_LOW_CREDIT_THRESHOLD;
+  if (e != null && String(e).trim() !== "") {
+    const n = Number(e);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return 10;
+}
+
+/**
  * Darwin — the evolution engine.
  * Orchestrates hub-client, gene-store, fitness-tracker, capsule-selector,
  * and (later) mutator + peer-exchange into a single lifecycle.
@@ -577,7 +590,9 @@ export class Darwin {
       this.#processPendingEvents(res.pendingEvents);
 
       // Accumulate tasks across heartbeats so none are lost between cycles
-      const freshTasks = res.raw?.available_tasks || res.availableWork || [];
+      const freshTasks = res.availableWork?.length
+        ? res.availableWork
+        : (res.raw?.available_tasks || res.raw?.available_work || []);
       this.#updateTaskBuffer(freshTasks);
 
       // Lightweight gap analysis refresh (data only, no template creation)
@@ -585,7 +600,8 @@ export class Darwin {
 
       // On-demand fetch: fill gene pool gaps for available task signals
       const credits = res.creditBalance;
-      const lowCredit = typeof credits === "number" && credits < 10;
+      const lowCreditThreshold = resolveLowCreditThreshold();
+      const lowCredit = typeof credits === "number" && credits < lowCreditThreshold;
       if (this.#hubAssetFetchEnabled && !lowCredit && freshTasks.length > 0) {
         try { await this.#fetchGapSignals(freshTasks); } catch { /* best effort */ }
       }
@@ -652,14 +668,15 @@ export class Darwin {
   #updateTaskBuffer(freshTasks) {
     const freshIds = new Set();
     for (const task of freshTasks) {
-      const id = task.task_id;
+      const id = task.task_id || task.id;
       if (!id) continue;
+      const taskNorm = task.task_id ? task : { ...task, task_id: id };
       freshIds.add(id);
       if (this.#taskBuffer.has(id)) {
         this.#taskBuffer.get(id).missedHeartbeats = 0;
-        this.#taskBuffer.get(id).task = task;
+        this.#taskBuffer.get(id).task = taskNorm;
       } else {
-        this.#taskBuffer.set(id, { task, missedHeartbeats: 0 });
+        this.#taskBuffer.set(id, { task: taskNorm, missedHeartbeats: 0 });
       }
     }
     for (const [id, entry] of this.#taskBuffer) {
@@ -853,7 +870,8 @@ export class Darwin {
     try {
       // 0. Check credit balance — skip fetch when credits are low
       const credits = this.#lastHeartbeatResult?.creditBalance;
-      const lowCredit = typeof credits === "number" && credits < 10;
+      const lowCreditThreshold = resolveLowCreditThreshold();
+      const lowCredit = typeof credits === "number" && credits < lowCreditThreshold;
       if (lowCredit) {
         this.#emit("low-credit", { creditBalance: credits });
       }

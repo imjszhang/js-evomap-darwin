@@ -1751,6 +1751,15 @@ function cmdHelp() {
     DARWIN_STALE_CLAIM_MS  Abandon local worker claims older than this (default: 48h)
     DARWIN_CONTRIBUTOR_ONLY  Default contributor mode; 1/true/on forces no Hub pull; 0/false/off/no allows pull
     DARWIN_HUB_ASSET_FETCH   1/true/on allows Hub Capsule pull; 0/false/off/no disables (default when unset: no pull)
+    DARWIN_LOW_CREDIT_THRESHOLD  Skip Hub Capsule fetch when credits are below this (default: 10)
+    DARWIN_AGENT_GENERATE_COOLDOWN_MS  Min delay before retrying agent Capsule gen for same task (default: 3600000)
+    DARWIN_AGENT_GENERATE_MAX_ATTEMPTS  Consecutive failures before long backoff (default: 3)
+    DARWIN_AGENT_GENERATE_BAN_MS  Long backoff after max failures (default: 86400000)
+    DARWIN_AGENT_GENERATE_TITLE_MAX_LEN  Skip auto agent-generate for titles longer than this (default: 500)
+
+  Troubleshooting (OpenClaw plugin / worker):
+    Subagent LLM 401/429: fix API keys and model routing in the host (OpenClaw/Cursor), not NODE_SECRET.
+    Hub low credits: raise balance above DARWIN_LOW_CREDIT_THRESHOLD to re-enable fetch pulls.
 `);
 }
 

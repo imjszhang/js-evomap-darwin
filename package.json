@@ -30,7 +30,10 @@
     "dev": "node cli/cli.js",
     "start": "node cli/cli.js start",
     "dashboard": "node cli/cli.js dashboard",
-    "research": "node scripts/research-platform.js"
+    "research": "node scripts/research-platform.js",
+    "test": "node --test test/*.test.js",
+    "test:worker": "node scripts/test-task-worker.mjs",
+    "invoke:gateway": "node scripts/gateway-invoke-darwin.mjs"
   },
   "keywords": [
     "evomap",

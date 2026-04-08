@@ -408,7 +408,15 @@ async function generateCapsuleViaAgent(task, context) {
       timeoutMs: AGENT_GENERATE_TIMEOUT_MS,
     });
 
-    if (result?.status === "error" || result?.status === "timeout") return null;
+    if (result?.status === "timeout") {
+      pushEvent("agent-generate-timeout", `Subagent run timed out after ${AGENT_GENERATE_TIMEOUT_MS}ms (task ${task.task_id?.slice(0, 16) || "?"})`);
+      return null;
+    }
+    if (result?.status === "error") {
+      const detail = result?.error || result?.message || JSON.stringify(result).slice(0, 200);
+      pushEvent("agent-generate-error", `Subagent run error: ${detail}`);
+      return null;
+    }
 
     const { messages } = await pluginRuntime.subagent.getSessionMessages({
       sessionKey,
@@ -427,8 +435,9 @@ async function generateCapsuleViaAgent(task, context) {
     try { await pluginRuntime.subagent.deleteSession({ sessionKey }); } catch { /* best-effort */ }
 
     return capsule;
-  } catch {
+  } catch (err) {
     try { await pluginRuntime.subagent.deleteSession({ sessionKey }); } catch { /* best-effort */ }
+    pushEvent("agent-generate-error", `Subagent exception: ${err?.message || String(err)}`);
     return null;
   }
 }
@@ -929,11 +938,18 @@ export default function register(api) {
     label: "Darwin: Heartbeat",
     description:
       "View heartbeat status or manually trigger a heartbeat to EvoMap Hub. " +
-      "Shows credit balance, available work, and node survival status.",
+      "When trigger is true, by default runs the full Darwin heartbeat (includes TaskMatcher worker cycle). " +
+      "Set fullCycle false for Hub ping only (no task worker).",
     parameters: {
       type: "object",
       properties: {
-        trigger: { type: "boolean", description: "If true, send an immediate heartbeat to Hub" },
+        trigger: { type: "boolean", description: "If true, send an immediate heartbeat" },
+        fullCycle: {
+          type: "boolean",
+          description:
+            "When trigger is true: if true (default), call darwin.heartbeat() — Hub + task buffer + TaskMatcher. " +
+            "If false, only hub.heartbeat() (lighter, no worker scan).",
+        },
       },
     },
     async execute(_toolCallId, params) {
@@ -945,9 +961,10 @@ export default function register(api) {
           if (!darwin.hub.nodeId) {
             return textResult("Node not registered yet. Run darwin_evolve first.");
           }
-          const result = await darwin.hub.heartbeat();
+          const fullCycle = params.fullCycle !== false;
+          const result = fullCycle ? await darwin.heartbeat() : await darwin.hub.heartbeat();
           const state = await saveHeartbeatState(dataDir, result, darwin.hub.nodeId);
-          return jsonResult({ triggered: true, ...state.lastHeartbeat });
+          return jsonResult({ triggered: true, fullCycle, ...state.lastHeartbeat });
         }
 
         const state = await loadHeartbeatState(dataDir);

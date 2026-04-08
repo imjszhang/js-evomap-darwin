@@ -186,12 +186,18 @@ export class HubClient {
   async heartbeat() {
     const body = { node_id: this.#nodeId };
     const res = await this.#withRetry(() => this.#fetch("/a2a/heartbeat", body));
+    const normalizeTask = (t) => {
+      if (!t || typeof t !== "object") return t;
+      const task_id = t.task_id || t.id;
+      return task_id ? { ...t, task_id } : t;
+    };
+    const workList = res.available_work || res.available_tasks || [];
     return {
       timestamp: res.server_time || new Date().toISOString(),
       status: res.status,
       creditBalance: res.credit_balance,
       survivalStatus: res.survival_status,
-      availableWork: res.available_work || [],
+      availableWork: workList.map(normalizeTask),
       nextHeartbeatMs: res.next_heartbeat_ms || 300000,
       pendingEvents: res.pending_events || [],
       raw: res,
