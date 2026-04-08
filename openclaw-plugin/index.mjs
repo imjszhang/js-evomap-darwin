@@ -76,6 +76,27 @@ function jsonResult(data) {
   return textResult(JSON.stringify(data, null, 2));
 }
 
+/**
+ * 与 TaskMatcher.cycle 一致：优先跨心跳缓冲任务，否则用 lastHeartbeat 的
+ * availableWork / raw.available_tasks / raw.available_work，并统一 task_id（含 id → task_id）。
+ */
+function resolveTasksForWorker(darwin) {
+  const buffered = darwin.getBufferedTasks?.() ?? [];
+  const hb = darwin.lastHeartbeat;
+  const fallbackRaw =
+    hb?.availableWork ||
+    hb?.raw?.available_tasks ||
+    hb?.raw?.available_work ||
+    [];
+  const normalizeHubTask = (t) => {
+    if (!t || typeof t !== "object") return t;
+    const task_id = t.task_id || t.id;
+    return task_id ? { ...t, task_id } : t;
+  };
+  if (buffered.length > 0) return buffered;
+  return fallbackRaw.map(normalizeHubTask).filter((t) => t && t.task_id);
+}
+
 const HEARTBEAT_STATE_FILE = "heartbeat-state.json";
 const HEARTBEAT_HISTORY_MAX = 288;
 
@@ -126,6 +147,8 @@ async function saveHeartbeatState(dataDir, heartbeatResult, nodeId) {
 
 let darwinInstance = null;
 let pluginRuntime = null;
+/** Set by generateCapsuleViaAgent on failure (last call only; single-threaded tool runs). */
+let lastAgentGenerateFailure = null;
 
 const EVENT_BUFFER_MAX = 100;
 const eventBuffer = [];
@@ -362,11 +385,10 @@ Return ONLY a JSON code block with the Capsule object. No other text before or a
 Generate the Capsule now for the task above. The content must directly address "${title}".`;
 }
 
-function parseCapsuleFromReply(text) {
-  const jsonMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-  const raw = jsonMatch ? jsonMatch[1].trim() : text.trim();
+/** Normalize a parsed Capsule object (Subagent reply or external WS agent JSON). */
+function normalizeCapsuleObject(obj) {
   try {
-    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object") return null;
     if (obj.type !== "Capsule" || !obj.trigger || !obj.content) return null;
     if (!Array.isArray(obj.trigger)) obj.trigger = [String(obj.trigger)];
     obj.trigger = [...new Set(obj.trigger.map((s) => s.trim().toLowerCase()).filter(Boolean))];
@@ -390,8 +412,74 @@ function parseCapsuleFromReply(text) {
   }
 }
 
+function parseCapsuleFromReply(text) {
+  const jsonMatch = text.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  const raw = jsonMatch ? jsonMatch[1].trim() : text.trim();
+  try {
+    const obj = JSON.parse(raw);
+    return normalizeCapsuleObject(obj);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hub validate → gene store → match → claim+complete (Capsule from WebSocket agent or external JSON).
+ */
+async function runClaimWithCapsuleJson(darwin, claimId, rawJson) {
+  const worker = darwin.worker;
+  if (!worker) return textResult("TaskMatcher not attached.");
+
+  const tasks = resolveTasksForWorker(darwin);
+  const task = tasks.find((t) => t.task_id === claimId || t.id === claimId);
+  if (!task) {
+    return textResult(
+      `Task ${claimId} not in worker buffer. Run darwin_heartbeat with trigger:true first.`,
+    );
+  }
+
+  let raw = rawJson;
+  if (typeof raw !== "string") raw = JSON.stringify(raw);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return textResult(`capsuleJson is not valid JSON: ${e.message}`);
+  }
+  const capsule = normalizeCapsuleObject(parsed);
+  if (!capsule) {
+    return textResult("Capsule must have type Capsule, trigger, and content.");
+  }
+  const { buildBundle } = await import(
+    pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "bundle-builder.js")).href
+  );
+  const bundle = buildBundle(capsule);
+  try {
+    const vRes = await darwin.hub.validate(bundle);
+    const valid = vRes?.payload?.valid !== false && vRes?.valid !== false;
+    if (!valid) {
+      return textResult("Capsule failed Hub validate() pre-check.");
+    }
+  } catch (err) {
+    return textResult(`Hub validate error: ${err.message}`);
+  }
+  darwin.store.add(capsule, 0.5, "agent");
+  const match = worker.matchTask(task, darwin.store);
+  if (!match) {
+    return textResult(
+      "Capsule stored but task signals do not match generated triggers.",
+    );
+  }
+  const result = await worker.claimAndComplete(match, darwin);
+  return jsonResult({ ...result, agentGenerated: true, agentVia: "external_capsule" });
+}
+
 async function generateCapsuleViaAgent(task, context) {
-  if (!pluginRuntime?.subagent) return null;
+  lastAgentGenerateFailure = null;
+  if (!pluginRuntime?.subagent) {
+    lastAgentGenerateFailure = "pluginRuntime.subagent is not available";
+    return null;
+  }
 
   const sessionKey = `agent:main:subagent:darwin-capsule-${task.task_id?.slice(0, 16) || randomUUID().slice(0, 8)}`;
   const prompt = buildCapsulePrompt(task);
@@ -409,11 +497,13 @@ async function generateCapsuleViaAgent(task, context) {
     });
 
     if (result?.status === "timeout") {
+      lastAgentGenerateFailure = `Subagent timed out after ${AGENT_GENERATE_TIMEOUT_MS}ms`;
       pushEvent("agent-generate-timeout", `Subagent run timed out after ${AGENT_GENERATE_TIMEOUT_MS}ms (task ${task.task_id?.slice(0, 16) || "?"})`);
       return null;
     }
     if (result?.status === "error") {
       const detail = result?.error || result?.message || JSON.stringify(result).slice(0, 200);
+      lastAgentGenerateFailure = `Subagent run error: ${detail}`;
       pushEvent("agent-generate-error", `Subagent run error: ${detail}`);
       return null;
     }
@@ -434,10 +524,15 @@ async function generateCapsuleViaAgent(task, context) {
 
     try { await pluginRuntime.subagent.deleteSession({ sessionKey }); } catch { /* best-effort */ }
 
+    if (!capsule) {
+      lastAgentGenerateFailure =
+        "No valid Capsule in model reply (need ```json block with type Capsule, trigger[], content)";
+    }
     return capsule;
   } catch (err) {
     try { await pluginRuntime.subagent.deleteSession({ sessionKey }); } catch { /* best-effort */ }
-    pushEvent("agent-generate-error", `Subagent exception: ${err?.message || String(err)}`);
+    lastAgentGenerateFailure = err?.message || String(err);
+    pushEvent("agent-generate-error", `Subagent exception: ${lastAgentGenerateFailure}`);
     return null;
   }
 }
@@ -983,14 +1078,36 @@ export default function register(api) {
     label: "Darwin: Worker Pool",
     description:
       "View and control Worker Pool status — enable/disable worker, set domains, " +
-      "scan for matching tasks, or manually claim a specific task.",
+      "scan for matching tasks, or manually claim a specific task. " +
+      "Use claimWithAgent to generate a Capsule via OpenClaw Subagent when no local gene matches, then claim+submit. " +
+      "Set forceAgent true to ignore local genes (including template/hub matches) and always run Subagent first.",
     parameters: {
       type: "object",
       properties: {
         enable: { type: "boolean", description: "Enable the worker (register with Hub)" },
         disable: { type: "boolean", description: "Disable the worker" },
         scan: { type: "boolean", description: "Scan available tasks for matches" },
-        claim: { type: "string", description: "Claim and complete a specific task by ID" },
+        claim: { type: "string", description: "Claim and complete a specific task by ID (requires existing gene match)" },
+        claimWithAgent: {
+          type: "string",
+          description:
+            "Claim task by ID; if no gene matches, run Subagent to create a Capsule (same as TaskMatcher agent path), then claim+submit",
+        },
+        claimWithCapsuleTaskId: {
+          type: "string",
+          description:
+            "With claimWithCapsuleJson: task ID (must be in worker buffer). Use when Capsule was produced outside the plugin (e.g. Gateway WebSocket agent).",
+        },
+        claimWithCapsuleJson: {
+          type: "string",
+          description:
+            "JSON string of a full Capsule object (type Capsule, trigger, content, …). Paired with claimWithCapsuleTaskId.",
+        },
+        forceAgent: {
+          type: "boolean",
+          description:
+            "With claimWithAgent: skip local gene pool and always generate via Subagent (avoids template/pre-validate failures on stale matches)",
+        },
         domains: { type: "string", description: "Comma-separated domain list to set" },
       },
     },
@@ -1015,8 +1132,7 @@ export default function register(api) {
           return jsonResult({ domains });
         }
         if (params.scan) {
-          const hb = darwin.lastHeartbeat;
-          const tasks = hb?.raw?.available_tasks || [];
+          const tasks = resolveTasksForWorker(darwin);
           const candidates = worker.scan(tasks, darwin.store);
           return jsonResult({ tasksAvailable: tasks.length, matches: candidates.length, candidates: candidates.slice(0, 10).map((c) => ({
             taskId: c.task.task_id,
@@ -1025,10 +1141,79 @@ export default function register(api) {
             matchedSignals: c.matchedSignals,
           })) });
         }
+        if (params.claimWithCapsuleTaskId != null && params.claimWithCapsuleJson != null) {
+          return await runClaimWithCapsuleJson(
+            darwin,
+            String(params.claimWithCapsuleTaskId).trim(),
+            params.claimWithCapsuleJson,
+          );
+        }
+        if (params.claimWithAgent) {
+          const claimId = params.claimWithAgent.trim();
+          const tasks = resolveTasksForWorker(darwin);
+          const task = tasks.find((t) => t.task_id === claimId || t.id === claimId);
+          if (!task) {
+            return textResult(
+              `Task ${claimId} not in worker buffer. Run darwin_heartbeat with trigger:true first to refresh available work.`,
+            );
+          }
+          const forceAgent =
+            params.forceAgent === true ||
+            params.forceAgent === "true" ||
+            params.forceAgent === 1;
+          let match = forceAgent ? null : worker.matchTask(task, darwin.store);
+          let agentGenerated = false;
+          if (!match) {
+            if (!pluginRuntime?.subagent) {
+              return textResult(
+                "No matching gene and Gateway subagent is unavailable — cannot generate a Capsule via agent.",
+              );
+            }
+            const { shouldSkipAgentGenerateTitle } = await import(
+              pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "task-matcher.js")).href
+            );
+            if (shouldSkipAgentGenerateTitle(task.title)) {
+              return textResult("Task title skipped for agent generation (policy).");
+            }
+            const capsule = await generateCapsuleViaAgent(task, {
+              store: darwin.store,
+              hub: darwin.hub,
+            });
+            if (!capsule) {
+              const detail = lastAgentGenerateFailure || "unknown";
+              return textResult(
+                `Agent failed to produce a valid Capsule. Detail: ${detail}`,
+              );
+            }
+            const { buildBundle } = await import(
+              pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "bundle-builder.js")).href
+            );
+            const bundle = buildBundle(capsule);
+            try {
+              const vRes = await darwin.hub.validate(bundle);
+              const valid = vRes?.payload?.valid !== false && vRes?.valid !== false;
+              if (!valid) {
+                return textResult("Agent Capsule failed Hub validate() pre-check.");
+              }
+            } catch (err) {
+              return textResult(`Hub validate error: ${err.message}`);
+            }
+            darwin.store.add(capsule, 0.5, "agent");
+            match = worker.matchTask(task, darwin.store);
+            if (!match) {
+              return textResult(
+                "Capsule stored but task signals do not match generated triggers — adjust Capsule triggers or task signals.",
+              );
+            }
+            agentGenerated = true;
+          }
+          const result = await worker.claimAndComplete(match, darwin);
+          return jsonResult({ ...result, agentGenerated });
+        }
         if (params.claim) {
-          const hb = darwin.lastHeartbeat;
-          const tasks = hb?.raw?.available_tasks || [];
-          const task = tasks.find((t) => t.task_id === params.claim);
+          const tasks = resolveTasksForWorker(darwin);
+          const claimId = params.claim.trim();
+          const task = tasks.find((t) => t.task_id === claimId || t.id === claimId);
           if (!task) return textResult(`Task ${params.claim} not found in available tasks.`);
           const match = worker.matchTask(task, darwin.store);
           if (!match) return textResult("No matching gene for this task.");
@@ -1038,6 +1223,32 @@ export default function register(api) {
         return jsonResult(worker.getStats());
       } catch (err) {
         return textResult(`Worker operation failed: ${err.message}`);
+      }
+    },
+  }, { optional: true });
+
+  api.registerTool({
+    name: "darwin_claim_capsule",
+    label: "Darwin: Claim with external Capsule JSON",
+    description:
+      "Use when Capsule JSON was produced outside the plugin (e.g. Gateway WebSocket `agent` RPC). " +
+      "Validates, stores, matches task signals, then claim + publish + complete.",
+    parameters: {
+      type: "object",
+      properties: {
+        taskId: { type: "string", description: "Hub task_id (must appear in Darwin worker buffer)" },
+        capsuleJson: { type: "string", description: "JSON string of a Capsule object (type, trigger, content, …)" },
+      },
+    },
+    async execute(_toolCallId, params) {
+      try {
+        if (!params.taskId || params.capsuleJson == null) {
+          return textResult("taskId and capsuleJson are required.");
+        }
+        const darwin = await getDarwin(pluginCfg);
+        return await runClaimWithCapsuleJson(darwin, String(params.taskId).trim(), params.capsuleJson);
+      } catch (err) {
+        return textResult(`darwin_claim_capsule failed: ${err.message}`);
       }
     },
   }, { optional: true });

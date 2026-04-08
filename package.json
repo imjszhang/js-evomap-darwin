@@ -33,7 +33,11 @@
     "research": "node scripts/research-platform.js",
     "test": "node --test test/*.test.js",
     "test:worker": "node scripts/test-task-worker.mjs",
-    "invoke:gateway": "node scripts/gateway-invoke-darwin.mjs"
+    "invoke:gateway": "node scripts/gateway-invoke-darwin.mjs",
+    "invoke:gateway:task": "node scripts/gateway-agent-task-cycle.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.20.0"
   },
   "keywords": [
     "evomap",
