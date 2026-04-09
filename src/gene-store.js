@@ -109,12 +109,16 @@ export class GeneStore {
    *   Level 2 (contains): one string contains the other      -> matchQuality 0.7
    *   Level 3 (token):   tokenized overlap (split on -_camel) -> matchQuality 0.5
    */
-  findByTaskType(taskType) {
+  findByTaskType(taskType, { excludeSources } = {}) {
     const query = taskType.toLowerCase();
     const queryTokens = GeneStore.#tokenize(query);
     const results = [];
+    const skipSources = excludeSources && excludeSources.length > 0
+      ? new Set(excludeSources)
+      : null;
 
     for (const [id, entry] of this.#genes) {
+      if (skipSources && skipSources.has(entry.source)) continue;
       const triggers = entry.capsule.trigger || entry.capsule.signals_match || [];
       let bestQuality = 0;
 
@@ -322,14 +326,20 @@ export class GeneStore {
 
   #load() {
     if (!existsSync(this.#filePath)) return;
+    let dirty = false;
     try {
       const raw = JSON.parse(readFileSync(this.#filePath, "utf-8"));
       for (const [id, entry] of Object.entries(raw)) {
         if (!entry.source) {
           entry.source = entry.capsule?._mutation ? "mutation" : "hub";
         }
+        if (entry.source === "template") {
+          dirty = true;
+          continue;
+        }
         this.#genes.set(id, entry);
       }
+      if (dirty) this.#save();
     } catch {
       // corrupted file, start fresh
     }
@@ -364,6 +374,7 @@ export class GeneStore {
         if (!entry.source) {
           entry.source = entry.capsule?._mutation ? "mutation" : "hub";
         }
+        if (entry.source === "template") continue;
         this.#genes.set(id, entry);
       }
       this.#onChange?.();

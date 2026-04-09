@@ -664,10 +664,29 @@ async function getDarwin(pluginCfg) {
     pushEvent("evolve-think", "Agent-driven evolution cycle — darwin_think available");
   });
 
-  if (pluginRuntime?.subagent && darwinInstance.worker) {
-    darwinInstance.worker.setGenerateCallback(async (task, context) => {
-      return await generateCapsuleViaAgent(task, context);
-    });
+  // Wire Capsule generation: prefer independent LLM generator (works outside
+  // gateway context); fall back to OpenClaw subagent only when LLM key is
+  // absent and subagent is available.
+  if (darwinInstance.worker) {
+    let generatorWired = false;
+    try {
+      const { CapsuleGenerator } = await import(
+        pathToFileURL(nodePath.join(PROJECT_ROOT, "src", "capsule-generator.js")).href
+      );
+      const gen = new CapsuleGenerator();
+      if (gen.available) {
+        darwinInstance.worker.setGenerateCallback(async (task) => {
+          return await gen.generateCapsule(task);
+        });
+        generatorWired = true;
+      }
+    } catch { /* CapsuleGenerator not available */ }
+
+    if (!generatorWired && pluginRuntime?.subagent) {
+      darwinInstance.worker.setGenerateCallback(async (task, context) => {
+        return await generateCapsuleViaAgent(task, context);
+      });
+    }
   }
 
   if (darwinInstance.hub.nodeId && darwinInstance.worker) {

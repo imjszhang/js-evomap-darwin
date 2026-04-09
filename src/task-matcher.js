@@ -167,8 +167,11 @@ export class TaskMatcher {
    * Match a single task against the gene store.
    * A task's `signals` is a comma-separated string; each signal is tested
    * against capsule triggers via geneStore.findByTaskType().
+   * @param {object} task
+   * @param {import('./gene-store.js').GeneStore} geneStore
+   * @param {{ excludeSources?: string[] }} [options]
    */
-  matchTask(task, geneStore) {
+  matchTask(task, geneStore, { excludeSources } = {}) {
     const signalsRaw = task.signals || "";
     const signals = signalsRaw.split(",").map((s) => s.trim()).filter(Boolean);
     if (signals.length === 0) return null;
@@ -179,7 +182,7 @@ export class TaskMatcher {
     const matchedSignals = [];
 
     for (const signal of signals) {
-      const genes = geneStore.findByTaskType(signal);
+      const genes = geneStore.findByTaskType(signal, { excludeSources });
       if (genes.length > 0) {
         matchedSignals.push(signal);
         const topGene = genes[0];
@@ -207,11 +210,14 @@ export class TaskMatcher {
 
   /**
    * Batch-scan tasks, returning candidates sorted by match score (descending).
+   * @param {object[]} tasks
+   * @param {import('./gene-store.js').GeneStore} geneStore
+   * @param {{ excludeSources?: string[] }} [options]
    */
-  scan(tasks, geneStore) {
+  scan(tasks, geneStore, { excludeSources } = {}) {
     const results = [];
     for (const task of tasks) {
-      const match = this.matchTask(task, geneStore);
+      const match = this.matchTask(task, geneStore, { excludeSources });
       if (match && match.matchScore >= this.#minMatchScore) {
         results.push(match);
       }
@@ -565,11 +571,12 @@ export class TaskMatcher {
         : fallbackRaw.map(normalizeHubTask).filter((t) => t && t.task_id);
     if (tasks.length === 0) return;
 
-    // Scan
-    let candidates = this.scan(tasks, darwin.store);
+    // Scan — exclude template-sourced genes so agent-generate can take over
+    const scanOpts = { excludeSources: ["template"] };
+    let candidates = this.scan(tasks, darwin.store, scanOpts);
     this.#counters.scanned += tasks.length;
 
-    // Fallback: use agent callback to generate capsules for unmatched tasks
+    // Agent-generate capsules when no viable (non-template) match exists
     if (candidates.length === 0 && this.#autoSubmit && this.#enabled && this.#generateCallback) {
       const touched = new Set([
         ...this.#activeTasks.map((t) => t.taskId),
@@ -609,7 +616,7 @@ export class TaskMatcher {
           darwin._emit?.("error", { phase: "agent-generate", taskId: target.task_id, error: err.message });
         }
       }
-      candidates = this.scan(tasks, darwin.store);
+      candidates = this.scan(tasks, darwin.store, scanOpts);
     }
 
     this.#lastScanResults = candidates;
@@ -626,7 +633,9 @@ export class TaskMatcher {
     if (!this.#autoSubmit || !this.#enabled) return;
 
     const slotsAvailable = this.#maxConcurrent - this.#activeTasks.length;
-    const toClaim = candidates.slice(0, Math.max(0, slotsAvailable));
+    const toClaim = candidates
+      .filter((c) => !this.#isTaskCoolingDown(c.task.task_id))
+      .slice(0, Math.max(0, slotsAvailable));
 
     for (const match of toClaim) {
       try {

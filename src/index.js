@@ -190,8 +190,23 @@ export class Darwin {
       this.#sponsor = module;
     } else if (name === "TaskMatcher") {
       this.#taskMatcher = module;
+      this.#wireGeneratorIfAvailable(module);
     }
     return this;
+  }
+
+  /**
+   * Auto-wire the CapsuleGenerator as the TaskMatcher's generateCallback
+   * when DARWIN_LLM_API_KEY is set and no callback is already registered.
+   */
+  #wireGeneratorIfAvailable(taskMatcher) {
+    if (!process.env.DARWIN_LLM_API_KEY) return;
+    import("./capsule-generator.js").then(({ CapsuleGenerator }) => {
+      const gen = new CapsuleGenerator();
+      if (gen.available) {
+        taskMatcher.setGenerateCallback((task) => gen.generateCapsule(task));
+      }
+    }).catch(() => {});
   }
 
   // ── Event system ──────────────────────────────────────────────────────
@@ -897,22 +912,13 @@ export class Darwin {
         }
       }
 
-      // 2. Gap analysis: identify uncovered/weak signals and pre-generate templates
+      // 2. Gap analysis: identify uncovered/weak signals (template generation removed —
+      //    the TaskMatcher agent-generate path handles uncovered signals instead).
       try {
         this.#lastGapAnalysis = this.#analyzeSignalCoverage();
         const gap = this.#lastGapAnalysis;
-        let templatesCreated = 0;
-        const uncoveredToTemplate = gap.uncovered.slice(0, 5);
-        for (const sig of uncoveredToTemplate) {
-          const task = this.#findBufferedTaskForSignal(sig);
-          if (!task) continue;
-          const capsule = CapsuleFactory.createForTask(task);
-          if (capsule && this.#store.add(capsule, 0, "template")) {
-            templatesCreated++;
-          }
-        }
         if (gap.uncovered.length > 0 || gap.weak.length > 0) {
-          this.#emit("gap-analysis", { uncovered: gap.uncovered, weak: gap.weak, templatesCreated });
+          this.#emit("gap-analysis", { uncovered: gap.uncovered, weak: gap.weak });
         }
       } catch {
         // Gap analysis is best-effort
