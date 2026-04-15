@@ -660,8 +660,102 @@ async function getDarwin(pluginCfg) {
     pushEvent("pending-event", `Hub event: ${type}`);
   });
 
-  darwinInstance.setAgentCallback(async () => {
-    pushEvent("evolve-think", "Agent-driven evolution cycle — darwin_think available");
+  // Agent-driven evolution callback: runs every evolve cycle (default 4h).
+  // Writes evolution state to a pending file so darwin_think can surface
+  // actionable recommendations with full meta-gene strategy text.
+  const evolvePendingPath = nodePath.join(
+    pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data"),
+    "evolve-pending.json",
+  );
+
+  darwinInstance.setAgentCallback(async (darwin) => {
+    try {
+      const storeStats = darwin.store.getStats();
+      const trackerStats = darwin.tracker.getStats();
+      const allGenes = darwin.store.ranked(storeStats.capacity || 200);
+
+      const unscored = [];
+      const scored = [];
+      for (const g of allGenes) {
+        const samples = darwin.tracker.getSampleCount(g.assetId);
+        if (samples < 3) unscored.push({ ...g, samples });
+        else scored.push({ ...g, samples });
+      }
+
+      // Determine highest-priority action
+      let action = null;
+
+      if (unscored.length > 0) {
+        action = {
+          type: "ab_test",
+          priority: 1,
+          reason: `${unscored.length} capsule(s) have fewer than 3 samples and need A/B testing`,
+          capsuleId: unscored[0].assetId,
+          summary: unscored[0].capsule?.summary || "(no summary)",
+          triggers: unscored[0].capsule?.trigger || unscored[0].capsule?.signals_match || [],
+        };
+      }
+
+      if (!action && scored.length > 0) {
+        const mutationCandidates = scored.filter((g) => g.fitness > 0.5 && g.samples >= 3);
+        if (mutationCandidates.length > 0) {
+          const top = mutationCandidates[0];
+          action = {
+            type: "mutation",
+            priority: 2,
+            reason: `Capsule with fitness ${top.fitness.toFixed(3)} is a good mutation candidate`,
+            capsuleId: top.assetId,
+            summary: top.capsule?.summary || "(no summary)",
+            fitness: top.fitness,
+          };
+        }
+      }
+
+      if (!action && trackerStats.tokenSavingsRate < 0) {
+        action = {
+          type: "fitness_review",
+          priority: 3,
+          reason: `Token savings rate is negative (${trackerStats.tokenSavingsRate}) — review capsule usage`,
+        };
+      }
+
+      if (!action) {
+        action = {
+          type: "idle",
+          priority: 0,
+          reason: "Gene pool is healthy. Consider fetching new capsules from Hub.",
+        };
+      }
+
+      const pending = {
+        timestamp: new Date().toISOString(),
+        poolSize: storeStats.size,
+        capacity: storeStats.capacity,
+        avgFitness: storeStats.avgFitness,
+        topFitness: storeStats.topFitness,
+        tokenSavingsRate: trackerStats.tokenSavingsRate,
+        unscoredCount: unscored.length,
+        scoredCount: scored.length,
+        action,
+        unscored: unscored.slice(0, 10).map((g) => ({
+          assetId: g.assetId,
+          summary: g.capsule?.summary || "(no summary)",
+          triggers: g.capsule?.trigger || g.capsule?.signals_match || [],
+          samples: g.samples,
+        })),
+        topScored: scored.slice(0, 5).map((g) => ({
+          assetId: g.assetId,
+          summary: g.capsule?.summary || "(no summary)",
+          fitness: g.fitness,
+          samples: g.samples,
+        })),
+      };
+
+      await writeFile(evolvePendingPath, JSON.stringify(pending, null, 2), "utf-8");
+      pushEvent("evolve-think", `Analysis: ${action.type} — ${action.reason}`);
+    } catch (err) {
+      pushEvent("error", `agentCallback failed: ${err.message}`);
+    }
   });
 
   // Wire Capsule generation: prefer independent LLM generator (works outside
@@ -1372,6 +1466,16 @@ export default function register(api) {
     async execute() {
       try {
         const darwin = await getDarwin(pluginCfg);
+
+        // Check if agentCallback has produced a pending analysis file
+        const dataDir = pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data");
+        const evolvePendingPath = nodePath.join(dataDir, "evolve-pending.json");
+        let pendingAnalysis = null;
+        try {
+          const raw = await readFile(evolvePendingPath, "utf-8");
+          pendingAnalysis = JSON.parse(raw);
+        } catch { /* no pending file yet */ }
+
         const storeStats = darwin.store.getStats();
         const trackerStats = darwin.tracker.getStats();
 
@@ -1487,7 +1591,7 @@ export default function register(api) {
           });
         }
 
-        return jsonResult({ state, recommendations });
+        return jsonResult({ state, recommendations, agentCallback: pendingAnalysis });
       } catch (err) {
         return textResult(`Think failed: ${err.message}`);
       }
@@ -2369,6 +2473,22 @@ export default function register(api) {
         const EIGHT_H = 8 * 60 * 60 * 1000;
         const TWENTY_FOUR_H = 24 * 60 * 60 * 1000;
         const SEVEN_D = 7 * 24 * 60 * 60 * 1000;
+        const FIVE_H = 5 * 60 * 60 * 1000;
+
+        // Check agentCallback freshness: evolve-pending.json updated within 5 hours
+        const evolvePendingPath = nodePath.join(
+          pluginCfg.dataDir || nodePath.join(PROJECT_ROOT, "data"),
+          "evolve-pending.json",
+        );
+        let agentCallbackAge = null;
+        let agentCallbackAction = null;
+        try {
+          const stat = nodeFs.statSync(evolvePendingPath);
+          agentCallbackAge = now - stat.mtimeMs;
+          const pendingRaw = nodeFs.readFileSync(evolvePendingPath, "utf-8");
+          const pending = JSON.parse(pendingRaw);
+          agentCallbackAction = pending.action?.type || "unknown";
+        } catch { /* no pending file */ }
 
         const checks = {
           heartbeatFresh: lastHeartbeatAge !== null && lastHeartbeatAge < TEN_MIN
@@ -2388,6 +2508,13 @@ export default function register(api) {
               : "fail",
           genePoolHealthy: genePoolFill > 0.1 ? "ok" : genePoolFill > 0.05 ? "warn" : "fail",
           peerConnected: peerConnections > 0 ? "ok" : "fail",
+          agentCallbackFresh: agentCallbackAge !== null && agentCallbackAge < FIVE_H
+            ? "ok"
+            : agentCallbackAge !== null && agentCallbackAge < TWENTY_FOUR_H
+              ? "warn"
+              : agentCallbackAge !== null
+                ? "stale"
+                : "not_registered",
         };
 
         sendJson(res, 200, {
@@ -2396,6 +2523,8 @@ export default function register(api) {
           lastHeartbeatAge,
           lastEvolveAge,
           lastFitnessRecordAge,
+          agentCallbackAge,
+          agentCallbackAction,
           genePoolFill: Math.round(genePoolFill * 1000) / 1000,
           genePoolSize: status.geneStore?.size ?? 0,
           genePoolCapacity: status.geneStore?.capacity ?? 200,

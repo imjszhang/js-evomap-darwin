@@ -26,19 +26,19 @@ export function buildBundle(capsule) {
     signals_match: Array.isArray(capsule.trigger) ? [...capsule.trigger] : [],
     summary: (capsule.summary || "").slice(0, 200),
     strategy,
+    validation: ["node -e \"require('assert').strict.deepStrictEqual(300 * 0.8, 240)\""],
   };
   const geneId = computeAssetId(gene);
 
-  // Compute Capsule asset_id BEFORE adding the gene cross-reference.
-  // The Hub auto-links Gene → Capsule via the bundle's assets array order,
-  // so it hashes the Capsule without the `gene` field.
-  const capsuleId = computeAssetId(capsule);
-
+  // Build the full capsule with gene cross-reference, then compute hash.
+  // The Hub strips ONLY `asset_id` before hashing — all other fields
+  // (including `gene`) are part of the hash input.
   const capsuleCopy = {
     ...capsule,
-    asset_id: capsuleId,
     gene: geneId,
   };
+  const capsuleId = computeAssetId(capsuleCopy);
+  capsuleCopy.asset_id = capsuleId;
 
   // EvolutionEvent: only include fields the Hub schema accepts
   const event = {
